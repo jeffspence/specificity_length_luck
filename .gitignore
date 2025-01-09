@@ -1,0 +1,7 @@
+paper_figures/*
+data/wright_fisher_trajectories.txt
+data/simulated_realized_heritability.txt
+data/p_val_ranking_sims*
+data/full_afs_N_20000.npy
+data/s_hets_N_20000.npy
+data/vgs_N_20000.npy
