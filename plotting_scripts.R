@@ -14,10 +14,29 @@ library(BAS)
 library(R.utils)
 theme_set(theme_cowplot(font_size = 9))
 
-
 #########################
 ### Set the following to the repo directory
 setwd('~/research/specificity_length_luck/')
+
+
+
+
+
+##### Function for making scientific notation look nice
+fancy_scientific <- function(l) {
+  # turn in to character string in scientific notation
+  l <- format(l, scientific = TRUE)
+  l <- gsub("0e\\+00","0",l)
+  # quote the part before the exponent to keep all the digits
+  l <- gsub("^(.*)e", "'\\1'e", l)
+  # turn the 'e+' into plotmath format
+  l <- gsub("e", "%*%10^", l)
+  # return this as an expression
+  parse(text=l)
+}
+
+
+
 
 
 #########################
@@ -90,7 +109,7 @@ save_plot(outfile, p1,base_width = 2.3, base_height = 2)
 
 
 #########################
-### Figures 1C,D, S1-3 ###
+### Figures 1C,D, S1-3 ##
 #########################
 
 d_all_gwas_hits=fread("data/all_gwas_hits.txt")
@@ -119,31 +138,72 @@ coloc_gene_counts[coloc_gene_counts$burden_genes>=10,] %>% arrange(trait) %>% se
 
 #######
 
+
 selected_traits=c("50_irnt","3062_irnt","23106_irnt",
                   "30780_irnt","30760_irnt","23105_irnt",
-                  "30880_irnt","30830_irnt","30770_irnt",
+                  "30830_irnt", "30880_irnt","30770_irnt",
                   "30050_irnt","30100_irnt","30010_irnt")
 
 coloc_selected=coloc_gene_counts[coloc_gene_counts$pheno %in% selected_traits,]
-coloc_selected$name=c("FVC","LDL","WBI","SHBG","IGF-1","Urate","BMR","HDL","RBC count","MPV","MCH","Height")
+coloc_selected$name=c("FVC","LDL","WBI","SHBG", "IGF-1", "Urate", "BMR","HDL","RBC count","MPV","MCH","Height")
 
+coloc_selected = coloc_selected %>% arrange(burden_genes)
 coloc_selected$name=factor(coloc_selected$name,levels = rev(coloc_selected$name))
 coloc_selected$type <- factor(coloc_selected$name, levels = c("Burden", "Coloc"))
 
-p1<-ggplot(coloc_selected, aes(x = name, y = burden_genes, fill = "Burden only")) +
-  geom_bar(stat = "identity", color = "black", width = 0.7) +
-  geom_bar(aes(y = coloc_count, fill = "Burden and GWAS"), stat = "identity", color = "black", width = 0.7) +
-  scale_fill_manual(values = c("Burden and GWAS" = "#1f77b4", "Burden only" = "#aec7e8"), breaks = c("", "")) +
-  # scale_fill_manual(values = c("Burden and GWAS" = "#1f77b4", "Burden only" = "#aec7e8"),
-  #                   breaks = c("Burden only", "Burden and GWAS")) +
-  labs(x = "", y = "Number of genes") +
+
+
+d_gene_info=fread("data/genes.v46.gtf")
+d_z_scores=fread("data/zscores_by_trait_MAF1_hgncIDs.txt") # burden z scores
+d_z_scores=d_z_scores[d_z_scores$hgnc_id %in% d_gene_info$hgnc_id,] 
+
+for (trait_temp in selected_traits){
+  d_burden_temp=d_z_scores %>% select(hgnc_id, trait_temp)
+  colnames(d_burden_temp)[2] = "z"
+  # gene_num=nrow(d_burden_temp[is.finite(d_burden_temp$z) & !is.na(d_burden_temp$z),])
+  gene_num = 18524
+  d_burden_temp$pval = 2 * pnorm(abs(d_burden_temp$z), lower.tail = FALSE)
+  
+  df=d_all_gwas_hits[d_all_gwas_hits$pheno==trait_temp,]
+  
+  d_burden_temp = d_burden_temp %>% 
+    arrange(pval) %>% 
+    filter(pval <= 0.05/gene_num) %>% 
+    add_column(gwas_locus_rank=Inf)
+  
+  print(trait_temp)
+  print(c(dim(d_burden_temp)[1], coloc_gene_counts$burden_genes[coloc_gene_counts$pheno==trait_temp]))
+  for(idx in 1:dim(d_burden_temp)[1]){
+    match = str_detect(df$burden_gene_coloc, d_burden_temp$hgnc_id[idx])
+    if(sum(match) == 1){
+      d_burden_temp$gwas_locus_rank[idx] = which(match) 
+    }
+    if(sum(match) > 1){
+      d_burden_temp$gwas_locus_rank[idx] = which(match)[1]
+    }
+  }
+  trait = coloc_selected$name[coloc_selected$pheno==trait_temp]
+  d_burden_temp = d_burden_temp %>% add_column(trait=trait) %>% add_column(count=1) %>% map_df(rev)
+  if(trait == 'Height'){
+    to_save = d_burden_temp 
+  } else {
+    to_save = rbind(to_save, d_burden_temp)
+  }
+}
+
+p1 <- ggplot(to_save, aes(x = trait, y = count, fill = "black")) +
+  geom_bar(stat = "identity", color = "black", width = 0.7, aes(fill=gwas_locus_rank)) +
+  scale_fill_viridis(direction=-1, begin=0.3, na.value='black',
+                     guide=guide_colorbar(ticks=F, reverse=TRUE)) + 
+  labs(x = "", y = "") +
+  scale_y_continuous(breaks = c()) +
   theme_cowplot(9) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1),
-        legend.position = c(0.3, 0.9),
-        legend.title = element_blank())
-
+        legend.title = element_blank(),
+        # legend.text = element_blank(),
+        legend.position = "none")
 outfile=paste0("paper_figures/fig1c.pdf")
-save_plot(outfile, p1,base_width = 3, base_height = 3)
+save_plot(outfile, p1,base_width = 2.7, base_height = 8.5)
 
 
 #######
@@ -179,7 +239,7 @@ for (trait_temp in unique(d_all_gwas_hits$pheno)){
       geom_hline(yintercept = burden_cutoff, color = "red", linetype = "dashed") +
       geom_vline(xintercept = gwas_cutoff, linetype = "dashed",color = "red") +
       scale_x_continuous(breaks = seq(0, 302, by = 50)) +
-      xlab(expression(paste(-log[10], " p (GWAS)"))) +
+      xlab(expression(paste(-log[10], " min p (GWAS) in GWAS locus"))) +
       ylab(expression(paste(-log[10], " min p (burden) in GWAS locus"))) +
       theme_cowplot(9)
     outfile=paste0("paper_figures/fig1d.pdf")
@@ -847,6 +907,1444 @@ save_plot(outfile, p1_supp, base_width = 2.25*4, base_height = 2*5)
 
 
 
+#########################
+### Figure S8-10 ###
+#########################
+#### supp plot with many traits in grid
+d_all_gwas_hits=fread("data/cojo/all_gwas_hits.txt")
+d_z_scores=fread("data/zscores_by_trait_MAF1_hgncIDs.txt") # burden z scores
+d_z_scores=d_z_scores[d_z_scores$hgnc_id %in% d_gene_info$hgnc_id,] 
+
+trait_temp = '50_irnt'
+trait_name = 'Height'
+
+d_burden_temp=d_z_scores %>% select(trait_temp)
+colnames(d_burden_temp)="z"
+gene_num=nrow(d_burden_temp[is.finite(d_burden_temp$z) & !is.na(d_burden_temp$z),])
+
+df=d_all_gwas_hits[d_all_gwas_hits$pheno==trait_temp,]
+df$burden_pval=2 * pnorm(abs(df$max_burden_z), lower.tail = FALSE)
+
+df[df$pval==0,]$pval=min(df[df$pval>0]$pval,na.rm = T)
+df[df$burden_pval==0,]$burden_pval=min(df[df$burden_pval>0]$burden_pval,na.rm = T)
+
+df$log_gwas_p=-log10(df$pval)
+df$log_burden_p = -log10(df$burden_pval)
+
+burden_cutoff=-log10(0.05/gene_num)
+gwas_cutoff=-log10(5e-8)
+
+p1 <- ggplot(df, aes(x=log_gwas_p, y=log_burden_p)) +
+  geom_point(size=1.1,color = "black",alpha=0.65) +
+  geom_hline(yintercept = burden_cutoff, color = "red", linetype = "dashed") +
+  geom_vline(xintercept = gwas_cutoff, linetype = "dashed",color = "red") +
+  scale_x_continuous(breaks = seq(0, 302, by = 50)) +
+  xlab(expression(paste(-log[10], " p (GWAS)"))) +
+  ylab(expression(paste(-log[10], " min p (burden) in GWAS locus"))) +
+  theme_cowplot(9)
+
+outfile=paste0("paper_figures/figS9.pdf")
+save_plot(outfile, p1, base_width = 3, base_height = 3)
+
+
+to_plot <- list()
+for(idx in 1:10){
+  trait_temp <- c("30050_irnt",
+                  "30100_irnt",
+                  "30010_irnt",
+                  "30760_irnt",
+                  "23105_irnt",
+                  "30880_irnt",
+                  "30770_irnt",
+                  "30830_irnt",
+                  "23106_irnt",
+                  "30780_irnt")[idx]
+  trait_name <- c("MCH",
+                  "MPV",
+                  "RBC count",
+                  "HDL",
+                  "BMR",
+                  "Urate",
+                  "IGF-1",
+                  "SHBG",
+                  "WBI",
+                  "LDL")[idx]
+  d_burden_temp=d_z_scores %>% select(trait_temp)
+  colnames(d_burden_temp)="z"
+  gene_num=nrow(d_burden_temp[is.finite(d_burden_temp$z) & !is.na(d_burden_temp$z),])
+  
+  df=d_all_gwas_hits[d_all_gwas_hits$pheno==trait_temp,]
+  df$burden_pval=2 * pnorm(abs(df$max_burden_z), lower.tail = FALSE)
+  
+  df[df$pval==0,]$pval=min(df[df$pval>0]$pval,na.rm = T)
+  df[df$burden_pval==0,]$burden_pval=min(df[df$burden_pval>0]$burden_pval,na.rm = T)
+  
+  df$log_gwas_p=-log10(df$pval)
+  df$log_burden_p = -log10(df$burden_pval)
+  
+  burden_cutoff=-log10(0.05/gene_num)
+  gwas_cutoff=-log10(5e-8)
+  
+  p1 <- ggplot(df, aes(x=log_gwas_p, y=log_burden_p)) +
+    geom_point(size=1.1,color = "black",alpha=0.65) +
+    geom_hline(yintercept = burden_cutoff, color = "red", linetype = "dashed") +
+    geom_vline(xintercept = gwas_cutoff, linetype = "dashed",color = "red") +
+    scale_x_continuous(breaks = seq(0, 302, by = 50)) +
+    xlab(expression(paste(-log[10], " p (GWAS)"))) +
+    ylab(expression(paste(-log[10], " min p (burden) in GWAS locus"))) +
+    theme_cowplot(9) +
+    ggtitle(trait_name)
+  
+  to_plot[[idx]] <- p1
+}
+
+to_plot_full <- plot_grid(to_plot[[1]], to_plot[[2]], to_plot[[3]], to_plot[[4]], to_plot[[5]],
+                          to_plot[[6]], to_plot[[7]], to_plot[[8]], to_plot[[9]],
+                          nrow=3, ncol=3, byrow=TRUE)
+
+save_plot('paper_figures/figS10.pdf', to_plot_full, base_width = 3*3, base_height = 3*3)
+
+
+d_gene_info=fread("data/genes.v46.gtf")
+d_z_scores=fread("data/zscores_by_trait_MAF1_hgncIDs.txt") # burden z scores
+d_z_scores=d_z_scores[d_z_scores$hgnc_id %in% d_gene_info$hgnc_id,] 
+
+for (trait_temp in selected_traits){
+  d_burden_temp=d_z_scores %>% select(hgnc_id, trait_temp)
+  colnames(d_burden_temp)[2] = "z"
+  gene_num = 18524
+  d_burden_temp$pval = 2 * pnorm(abs(d_burden_temp$z), lower.tail = FALSE)
+  
+  df=d_all_gwas_hits[d_all_gwas_hits$pheno==trait_temp,]
+  
+  d_burden_temp = d_burden_temp %>% 
+    arrange(pval) %>% 
+    filter(pval <= 0.05/gene_num) %>% 
+    add_column(gwas_locus_rank=Inf)
+  
+  print(trait_temp)
+  print(c(dim(d_burden_temp)[1], coloc_gene_counts$burden_genes[coloc_gene_counts$pheno==trait_temp]))
+  for(idx in 1:dim(d_burden_temp)[1]){
+    match = str_detect(df$burden_gene_coloc, d_burden_temp$hgnc_id[idx])
+    if(sum(match) == 1){
+      d_burden_temp$gwas_locus_rank[idx] = which(match) # / dim(df)[1]
+    }
+    if(sum(match) > 1){
+      d_burden_temp$gwas_locus_rank[idx] = which(match)[1] # / dim(df)[1]
+    }
+  }
+  trait = coloc_selected$name[coloc_selected$pheno==trait_temp]
+  d_burden_temp = d_burden_temp %>% add_column(trait=trait) %>% add_column(count=1) %>% map_df(rev)
+  if(trait == 'Height'){
+    to_save = d_burden_temp 
+  } else {
+    to_save = rbind(to_save, d_burden_temp)
+  }
+}
+
+p1 <- ggplot(to_save, aes(x = trait, y = count, fill = "black")) +
+  geom_bar(stat = "identity", color = "black", width = 0.7, aes(fill=gwas_locus_rank)) +
+  scale_fill_viridis(direction=-1, begin=0.3, na.value='black',
+                     guide=guide_colorbar(ticks=F, reverse=TRUE)) + 
+  labs(x = "", y = "Burden hits") +
+  scale_y_continuous(breaks = c()) +
+  theme_cowplot(9) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.title = element_blank(),
+        # legend.text = element_blank(),
+        legend.position = c(0.6, 0.7))
+outfile=paste0("paper_figures/figS8.pdf")
+save_plot(outfile, p1,base_width = 3, base_height = 5)
+
+
+
+
+#########################
+### Figure S11-13 ###
+#########################
+d_all_gwas_hits=fread("data/low_ld/all_gwas_hits.txt")
+d_z_scores=fread("data/zscores_by_trait_MAF1_hgncIDs.txt") # burden z scores
+d_z_scores=d_z_scores[d_z_scores$hgnc_id %in% d_gene_info$hgnc_id,] 
+
+trait_temp = '50_irnt'
+trait_name = 'Height'
+
+d_burden_temp=d_z_scores %>% select(trait_temp)
+colnames(d_burden_temp)="z"
+gene_num=nrow(d_burden_temp[is.finite(d_burden_temp$z) & !is.na(d_burden_temp$z),])
+
+df=d_all_gwas_hits[d_all_gwas_hits$pheno==trait_temp,]
+df$burden_pval=2 * pnorm(abs(df$max_burden_z), lower.tail = FALSE)
+
+df[df$pval==0,]$pval=min(df[df$pval>0]$pval,na.rm = T)
+df[df$burden_pval==0,]$burden_pval=min(df[df$burden_pval>0]$burden_pval,na.rm = T)
+
+df$log_gwas_p=-log10(df$pval)
+df$log_burden_p = -log10(df$burden_pval)
+
+burden_cutoff=-log10(0.05/gene_num)
+gwas_cutoff=-log10(5e-8)
+
+p1 <- ggplot(df, aes(x=log_gwas_p, y=log_burden_p)) +
+  geom_point(size=1.1,color = "black",alpha=0.65) +
+  geom_hline(yintercept = burden_cutoff, color = "red", linetype = "dashed") +
+  geom_vline(xintercept = gwas_cutoff, linetype = "dashed",color = "red") +
+  scale_x_continuous(breaks = seq(0, 302, by = 50)) +
+  xlab(expression(paste(-log[10], " p (GWAS)"))) +
+  ylab(expression(paste(-log[10], " min p (burden) in GWAS locus"))) +
+  theme_cowplot(9)
+
+outfile=paste0("paper_figures/figS12.pdf")
+save_plot(outfile, p1, base_width = 3, base_height = 3)
+
+
+to_plot <- list()
+for(idx in 1:10){
+  trait_temp <- c("30050_irnt",
+                  "30100_irnt",
+                  "30010_irnt",
+                  "30760_irnt",
+                  "23105_irnt",
+                  "30880_irnt",
+                  "30770_irnt",
+                  "30830_irnt",
+                  "23106_irnt",
+                  "30780_irnt")[idx]
+  trait_name <- c("MCH",
+                  "MPV",
+                  "RBC count",
+                  "HDL",
+                  "BMR",
+                  "Urate",
+                  "IGF-1",
+                  "SHBG",
+                  "WBI",
+                  "LDL")[idx]
+  d_burden_temp=d_z_scores %>% select(trait_temp)
+  colnames(d_burden_temp)="z"
+  gene_num=nrow(d_burden_temp[is.finite(d_burden_temp$z) & !is.na(d_burden_temp$z),])
+  
+  df=d_all_gwas_hits[d_all_gwas_hits$pheno==trait_temp,]
+  df$burden_pval=2 * pnorm(abs(df$max_burden_z), lower.tail = FALSE)
+  
+  df[df$pval==0,]$pval=min(df[df$pval>0]$pval,na.rm = T)
+  df[df$burden_pval==0,]$burden_pval=min(df[df$burden_pval>0]$burden_pval,na.rm = T)
+  
+  df$log_gwas_p=-log10(df$pval)
+  df$log_burden_p = -log10(df$burden_pval)
+  
+  burden_cutoff=-log10(0.05/gene_num)
+  gwas_cutoff=-log10(5e-8)
+  
+  p1 <- ggplot(df, aes(x=log_gwas_p, y=log_burden_p)) +
+    geom_point(size=1.1,color = "black",alpha=0.65) +
+    geom_hline(yintercept = burden_cutoff, color = "red", linetype = "dashed") +
+    geom_vline(xintercept = gwas_cutoff, linetype = "dashed",color = "red") +
+    scale_x_continuous(breaks = seq(0, 302, by = 50)) +
+    xlab(expression(paste(-log[10], " p (GWAS)"))) +
+    ylab(expression(paste(-log[10], " min p (burden) in GWAS locus"))) +
+    theme_cowplot(9) +
+    ggtitle(trait_name)
+  
+  to_plot[[idx]] <- p1
+}
+
+to_plot_full <- plot_grid(to_plot[[1]], to_plot[[2]], to_plot[[3]], to_plot[[4]], to_plot[[5]],
+                          to_plot[[6]], to_plot[[7]], to_plot[[8]], to_plot[[9]],
+                          nrow=3, ncol=3, byrow=TRUE)
+
+save_plot('paper_figures/figS13.pdf', to_plot_full, base_width = 3*3, base_height = 3*3)
+
+
+d_gene_info=fread("data/genes.v46.gtf")
+d_z_scores=fread("data/zscores_by_trait_MAF1_hgncIDs.txt") # burden z scores
+d_z_scores=d_z_scores[d_z_scores$hgnc_id %in% d_gene_info$hgnc_id,] 
+
+for (trait_temp in selected_traits){
+  d_burden_temp=d_z_scores %>% select(hgnc_id, trait_temp)
+  colnames(d_burden_temp)[2] = "z"
+  gene_num = 18524
+  d_burden_temp$pval = 2 * pnorm(abs(d_burden_temp$z), lower.tail = FALSE)
+  
+  df=d_all_gwas_hits[d_all_gwas_hits$pheno==trait_temp,]
+  
+  d_burden_temp = d_burden_temp %>% 
+    arrange(pval) %>% 
+    filter(pval <= 0.05/gene_num) %>% 
+    add_column(gwas_locus_rank=Inf)
+  
+  print(trait_temp)
+  print(c(dim(d_burden_temp)[1], coloc_gene_counts$burden_genes[coloc_gene_counts$pheno==trait_temp]))
+  for(idx in 1:dim(d_burden_temp)[1]){
+    match = str_detect(df$burden_gene_coloc, d_burden_temp$hgnc_id[idx])
+    if(sum(match) == 1){
+      d_burden_temp$gwas_locus_rank[idx] = which(match)
+    }
+    if(sum(match) > 1){
+      d_burden_temp$gwas_locus_rank[idx] = which(match)[1]
+    }
+  }
+  trait = coloc_selected$name[coloc_selected$pheno==trait_temp]
+  d_burden_temp = d_burden_temp %>% add_column(trait=trait) %>% add_column(count=1) %>% map_df(rev)
+  if(trait == 'Height'){
+    to_save = d_burden_temp 
+  } else {
+    to_save = rbind(to_save, d_burden_temp)
+  }
+}
+
+p1 <- ggplot(to_save, aes(x = trait, y = count, fill = "black")) +
+  geom_bar(stat = "identity", color = "black", width = 0.7, aes(fill=gwas_locus_rank)) +
+  scale_fill_viridis(direction=-1, begin=0.3, na.value='black',
+                     guide=guide_colorbar(ticks=F, reverse=TRUE)) + 
+  labs(x = "", y = "Burden hits") +
+  scale_y_continuous(breaks = c()) +
+  theme_cowplot(9) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.title = element_blank(),
+        # legend.text = element_blank(),
+        legend.position = c(0.6, 0.7))
+outfile=paste0("paper_figures/figS11.pdf")
+save_plot(outfile, p1,base_width = 3, base_height = 5)
+
+
+
+
+
+#########################
+### Figure S14-16 ###
+#########################
+selected_traits=c("50_irnt",
+                  "30050_irnt",
+                  "30100_irnt",
+                  "30010_irnt",
+                  "30760_irnt",
+                  "23105_irnt",
+                  "30880_irnt",
+                  "30770_irnt",
+                  "30830_irnt",
+                  "23106_irnt",
+                  "30780_irnt",
+                  "3062_irnt")
+selected_trait_names=c("Height",
+                       "MCH",
+                       "MPV",
+                       "RBC count",
+                       "HDL",
+                       "BMR",
+                       "Urate",
+                       "IGF-1",
+                       "SHBG",
+                       "WBI",
+                       "LDL",
+                       "FVC")
+trait_matcher = data.frame(name=selected_trait_names, pheno=selected_traits)
+trait_matcher$name=factor(trait_matcher$name,levels = trait_matcher$name)
+
+df_magma <- read_table(paste0('data/magma/', '50_irnt', '.genes.out')) %>% rename(ensg=GENE)
+df_burden <- read_csv(paste0('data/burden/burden_trait_', '50_irnt', '.csv'))
+df_burden$pval <- pchisq((df_burden$beta / df_burden$standard_error)^2, 1, lower.tail=F)
+
+df <- df_magma %>% left_join(df_burden, by='ensg')
+
+burden_cutoff=-log10(0.05/18524)
+magma_cutoff=-log10(0.05/18524)
+
+p1 <- ggplot(df, aes(x=-log10(P), y=-log10(pval))) +
+  geom_point(size=1.1,color = "black",alpha=0.65) +
+  geom_hline(yintercept = burden_cutoff, color = "red", linetype = "dashed") +
+  geom_vline(xintercept = magma_cutoff, linetype = "dashed",color = "red") +
+  # scale_x_continuous(breaks = seq(0, 352, by = 50)) +
+  xlab(expression(paste(-log[10], " p (MAGMA) for gene"))) +
+  ylab(expression(paste(-log[10], " p (burden) for gene"))) +
+  coord_cartesian(clip = "off") +
+  theme_cowplot(9)
+
+outfile="paper_figures/figS15.pdf"
+save_plot(outfile, p1, base_width = 3, base_height = 3)
+
+
+# Scatters for a bunch of traits
+to_plot <- list()
+for(idx in 1:10){
+  trait_temp <- c("30050_irnt",
+                  "30100_irnt",
+                  "30010_irnt",
+                  "30760_irnt",
+                  "23105_irnt",
+                  "30880_irnt",
+                  "30770_irnt",
+                  "30830_irnt",
+                  "23106_irnt",
+                  "30780_irnt")[idx]
+  trait_name <- c("MCH",
+                  "MPV",
+                  "RBC count",
+                  "HDL",
+                  "BMR",
+                  "Urate",
+                  "IGF-1",
+                  "SHBG",
+                  "WBI",
+                  "LDL")[idx]
+  
+  df_magma <- read_table(paste0('data/magma/', trait_temp, '.genes.out')) %>% rename(ensg=GENE)
+  df_burden <- read_csv(paste0('data/burden/burden_trait_', trait_temp, '.csv'))
+  df_burden$pval <- pchisq((df_burden$beta / df_burden$standard_error)^2, 1, lower.tail=F)
+  
+  df <- df_magma %>% left_join(df_burden, by='ensg')
+  
+  p1 <- ggplot(df, aes(x=-log10(P), y=-log10(pval))) +
+    geom_point(size=1.1,color = "black",alpha=0.65) +
+    geom_hline(yintercept = burden_cutoff, color = "red", linetype = "dashed") +
+    geom_vline(xintercept = magma_cutoff, linetype = "dashed",color = "red") +
+    xlab(expression(paste(-log[10], " p (MAGMA) for gene"))) +
+    ylab(expression(paste(-log[10], " p (burden) for gene"))) +
+    coord_cartesian(clip = "off") +
+    theme_cowplot(9) +
+    ggtitle(trait_name)
+  
+  to_plot[[idx]] <- p1
+}
+
+to_plot_full <- plot_grid(to_plot[[1]], to_plot[[2]], to_plot[[3]], to_plot[[4]], to_plot[[5]],
+                          to_plot[[6]], to_plot[[7]], to_plot[[8]], to_plot[[9]],
+                          nrow=3, ncol=3, byrow=TRUE)
+
+save_plot('paper_figures/figS16.pdf', to_plot_full, base_width = 3*3, base_height = 3*3)
+
+
+
+
+
+d_gene_info=fread("data/genes.v46.gtf")
+
+mini <- d_gene_info %>% select(GeneSymbol, hgnc_id) %>% rename(ensg=GeneSymbol)
+
+
+d_z_scores=fread("data/zscores_by_trait_MAF1_hgncIDs.txt") # burden z scores
+d_z_scores=d_z_scores[d_z_scores$hgnc_id %in% d_gene_info$hgnc_id,] 
+
+for (trait_temp in selected_traits){
+  df_magma <- read_table(paste0('data/magma/', trait_temp, '.genes.out')) %>% rename(ensg=GENE)
+  d_burden_temp=d_z_scores %>% select(hgnc_id, trait_temp)
+  colnames(d_burden_temp)[2] = "burden_z"
+  
+  
+  d_burden_temp <- df_magma %>% right_join(mini, by='ensg') %>% right_join(d_burden_temp, by='hgnc_id')
+  d_burden_temp$gwas_locus_rank = rank(d_burden_temp$P)
+  d_burden_temp$gwas_locus_rank[which(is.na(d_burden_temp$P))] = NA
+  d_burden_temp$gwas_locus_rank[d_burden_temp$P > 0.05/gene_num] = NA
+  gene_num = 18524
+  d_burden_temp$burden_pval = 2 * pnorm(abs(d_burden_temp$burden_z), lower.tail = FALSE)
+  
+  d_burden_temp = d_burden_temp %>% 
+    arrange(burden_pval) %>% 
+    filter(burden_pval <= 0.05/gene_num)
+  
+  trait = trait_matcher$name[trait_matcher$pheno==trait_temp]
+  d_burden_temp = d_burden_temp %>% add_column(trait=trait) %>% add_column(count=1) %>% map_df(rev)
+  if(trait == 'Height'){
+    to_save = d_burden_temp 
+  } else {
+    to_save = rbind(to_save, d_burden_temp)
+  }
+}
+
+p1 <- ggplot(to_save, aes(x = trait, y = count, fill = "black")) +
+  geom_bar(stat = "identity", color = "black", width = 0.7, aes(fill=gwas_locus_rank)) +
+  scale_fill_viridis(direction=-1, begin=0.3, na.value='black',
+                     guide=guide_colorbar(ticks=F, reverse=TRUE)) + 
+  labs(x = "", y = "Burden hits") +
+  scale_y_continuous(breaks = c()) +
+  theme_cowplot(9) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.title = element_blank(),
+        # legend.text = element_blank(),
+        legend.position = c(0.6, 0.7))
+outfile=paste0("paper_figures/figS14.pdf")
+save_plot(outfile, p1,base_width = 3, base_height = 5)
+
+
+
+
+#########################
+### Figure S17-19 ###
+#########################
+df_pops <- read_tsv(paste0('data/pops/', '50_irnt', '.preds')) %>% rename(ensg=ENSGID)
+
+df_burden <- read_csv(paste0('data/burden/burden_trait_', '50_irnt', '.csv'))
+df_burden$pval <- pchisq((df_burden$beta / df_burden$standard_error)^2, 1, lower.tail=F)
+
+df <- df_pops %>% left_join(df_burden, by='ensg')
+
+burden_cutoff=-log10(0.05/18524)
+
+p1 <- ggplot(df, aes(x=PoPS_Score, y=-log10(pval))) +
+  geom_point(size=1.1,color = "black",alpha=0.65) +
+  geom_hline(yintercept = burden_cutoff, color = "red", linetype = "dashed") +
+  xlab(expression(paste("PoPS score"))) +
+  ylab(expression(paste(-log[10], " p (burden) for gene"))) +
+  coord_cartesian(clip = "off") +
+  theme_cowplot(9)
+
+outfile="paper_figures/figS18.pdf"
+save_plot(outfile, p1, base_width = 3, base_height = 3)
+
+
+# Scatters for a bunch of traits
+to_plot <- list()
+for(idx in 1:10){
+  trait_temp <- c("30050_irnt",
+                  "30100_irnt",
+                  "30010_irnt",
+                  "30760_irnt",
+                  "23105_irnt",
+                  "30880_irnt",
+                  "30770_irnt",
+                  "30830_irnt",
+                  "23106_irnt",
+                  "30780_irnt")[idx]
+  trait_name <- c("MCH",
+                  "MPV",
+                  "RBC count",
+                  "HDL",
+                  "BMR",
+                  "Urate",
+                  "IGF-1",
+                  "SHBG",
+                  "WBI",
+                  "LDL")[idx]
+  
+  df_pops <- read_tsv(paste0('data/pops/', trait_temp, '.preds')) %>% rename(ensg=ENSGID)
+  df_burden <- read_csv(paste0('data/burden/burden_trait_', trait_temp, '.csv'))
+  df_burden$pval <- pchisq((df_burden$beta / df_burden$standard_error)^2, 1, lower.tail=F)
+  
+  df <- df_pops %>% left_join(df_burden, by='ensg')
+  
+  p1 <- ggplot(df, aes(x=PoPS_Score, y=-log10(pval))) +
+    geom_point(size=1.1,color = "black",alpha=0.65) +
+    geom_hline(yintercept = burden_cutoff, color = "red", linetype = "dashed") +
+    # geom_vline(xintercept = magma_cutoff, linetype = "dashed",color = "red") +
+    xlab(expression(paste("PoPS score"))) +
+    ylab(expression(paste(-log[10], " p (burden) for gene"))) +
+    coord_cartesian(clip = "off") +
+    theme_cowplot(9) +
+    ggtitle(trait_name)
+  
+  to_plot[[idx]] <- p1
+}
+
+to_plot_full <- plot_grid(to_plot[[1]], to_plot[[2]], to_plot[[3]], to_plot[[4]], to_plot[[5]],
+                          to_plot[[6]], to_plot[[7]], to_plot[[8]], to_plot[[9]],
+                          nrow=3, ncol=3, byrow=TRUE)
+
+save_plot('paper_figures/figS19.pdf', to_plot_full, base_width = 3*3, base_height = 3*3)
+
+
+
+#### PoPS corn cobs
+d_gene_info=fread("data/genes.v46.gtf")
+
+mini <- d_gene_info %>% select(GeneSymbol, hgnc_id) %>% rename(ensg=GeneSymbol)
+
+
+d_z_scores=fread("data/zscores_by_trait_MAF1_hgncIDs.txt") # burden z scores
+d_z_scores=d_z_scores[d_z_scores$hgnc_id %in% d_gene_info$hgnc_id,] 
+
+for (trait_temp in selected_traits){
+  df_pops <- read_tsv(paste0('data/pops/', '50_irnt', '.preds')) %>% rename(ensg=ENSGID)
+  d_burden_temp=d_z_scores %>% select(hgnc_id, trait_temp)
+  colnames(d_burden_temp)[2] = "burden_z"
+  
+  
+  d_burden_temp <- df_pops %>% right_join(mini, by='ensg') %>% right_join(d_burden_temp, by='hgnc_id')
+  d_burden_temp$gwas_locus_rank = rank(-d_burden_temp$PoPS_Score)
+  d_burden_temp$gwas_locus_rank[which(is.na(d_burden_temp$PoPS_Score))] = NA
+  gene_num = 18524
+  d_burden_temp$burden_pval = 2 * pnorm(abs(d_burden_temp$burden_z), lower.tail = FALSE)
+  
+  d_burden_temp = d_burden_temp %>% 
+    arrange(burden_pval) %>% 
+    filter(burden_pval <= 0.05/gene_num)
+  
+  trait = trait_matcher$name[trait_matcher$pheno==trait_temp]
+  d_burden_temp = d_burden_temp %>% add_column(trait=trait) %>% add_column(count=1) %>% map_df(rev)
+  if(trait == 'Height'){
+    to_save = d_burden_temp 
+  } else {
+    to_save = rbind(to_save, d_burden_temp)
+  }
+}
+
+p1 <- ggplot(to_save, aes(x = trait, y = count, fill = "black")) +
+  geom_bar(stat = "identity", color = "black", width = 0.7, aes(fill=gwas_locus_rank)) +
+  scale_fill_viridis(direction=-1, begin=0.3, na.value='black',
+                     guide=guide_colorbar(ticks=F, reverse=TRUE)) + 
+  labs(x = "", y = "Burden hits") +
+  scale_y_continuous(breaks = c()) +
+  theme_cowplot(9) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.title = element_blank(),
+        # legend.text = element_blank(),
+        legend.position = c(0.6, 0.7))
+outfile=paste0("paper_figures/figS17.pdf")
+save_plot(outfile, p1,base_width = 3, base_height = 5)
+
+
+
+
+
+
+
+
+
+
+
+
+#########################
+### Figure S20-22 ###
+#########################
+d_all_gwas_hits=fread("data/all_gwas_hits_pval_max_maf_0.5_downsample_.txt")
+d_all_gwas_hits_down05=fread("data/all_gwas_hits_pval_max_maf_0.5_downsample_0.5.txt")
+d_all_gwas_hits_down025=fread("data/all_gwas_hits_pval_max_maf_0.5_downsample_0.25.txt")
+
+
+trait_temp = '50_irnt'
+trait_name= 'height'
+d_burden_temp=d_z_scores %>% select(trait_temp)
+colnames(d_burden_temp)="z"
+gene_num=nrow(d_burden_temp[is.finite(d_burden_temp$z) & !is.na(d_burden_temp$z),])
+
+df=d_all_gwas_hits[d_all_gwas_hits$pheno==trait_temp,]
+df$burden_pval=2 * pnorm(abs(df$max_burden_z), lower.tail = FALSE)
+
+df_down05=d_all_gwas_hits_down05[d_all_gwas_hits_down05$pheno==trait_temp,]
+df_down05$burden_pval=2 * pnorm(abs(df_down05$max_burden_z), lower.tail = FALSE)
+df_down025=d_all_gwas_hits_down025[d_all_gwas_hits_down025$pheno==trait_temp,]
+df_down025$burden_pval=2 * pnorm(abs(df_down025$max_burden_z), lower.tail = FALSE)
+
+df[df$pval==0,]$pval=min(df[df$pval>0]$pval,na.rm = T)
+df[df$burden_pval==0,]$burden_pval=min(df[df$burden_pval>0]$burden_pval,na.rm = T)
+
+df_down05[df_down05$pval==0,]$pval=min(df_down05[df_down05$pval>0]$pval,na.rm = T)
+df_down05[df_down05$burden_pval==0,]$burden_pval=min(df_down05[df_down05$burden_pval>0]$burden_pval,na.rm = T)
+df_down025[df_down025$pval==0,]$pval=min(df_down025[df_down025$pval>0]$pval,na.rm = T)
+df_down025[df_down025$burden_pval==0,]$burden_pval=min(df_down025[df_down025$burden_pval>0]$burden_pval,na.rm = T)
+
+df$log_gwas_p=-log10(df$pval)
+df$log_burden_p = -log10(df$burden_pval)
+
+df_down05$log_gwas_p=-log10(df_down05$pval)
+df_down05$log_burden_p = -log10(df_down05$burden_pval)
+df_down025$log_gwas_p=-log10(df_down025$pval)
+df_down025$log_burden_p = -log10(df_down025$burden_pval)
+
+burden_cutoff=-log10(0.05/gene_num)
+gwas_cutoff=-log10(5e-8)
+
+p1 <- ggplot(df, aes(x=log_gwas_p, y=log_burden_p)) +
+  geom_point(aes(x=log_gwas_p, y=log_burden_p, color='Full sample'), size=1.1, alpha=0.65) +
+  geom_point(aes(x=log_gwas_p, y=log_burden_p, color='Half sample'), data=df_down05, size=1.1, alpha=0.65) +
+  geom_point(aes(x=log_gwas_p, y=log_burden_p, color='Quarter sample'), data=df_down025, size=1.1,alpha=0.65) +
+  scale_color_manual(values = c('Full sample' = "purple","Half sample"= "blue", 'Quarter sample'='orange')) +
+  geom_hline(yintercept = burden_cutoff, color = "red", linetype = "dashed") +
+  geom_vline(xintercept = gwas_cutoff, linetype = "dashed",color = "red") +
+  scale_x_continuous(breaks = seq(0, 302, by = 50)) +
+  xlab(expression(paste(-log[10], " p (GWAS)"))) +
+  ylab(expression(paste(-log[10], " min p (burden) in GWAS locus"))) +
+  theme_cowplot(9) +
+  theme(legend.title = element_blank()) +
+  ggtitle(trait_name)
+
+outfile=paste0("paper_figures/figS21.pdf")
+save_plot(outfile, p1, base_width = 5, base_height = 3)
+
+
+to_plot <- list()
+for(idx in 1:10){
+  trait_temp <- c("30050_irnt",
+                  "30100_irnt",
+                  "30010_irnt",
+                  "30760_irnt",
+                  "23105_irnt",
+                  "30880_irnt",
+                  "30770_irnt",
+                  "30830_irnt",
+                  "23106_irnt",
+                  "30780_irnt")[idx]
+  trait_name <- c("MCH",
+                  "MPV",
+                  "RBC count",
+                  "HDL",
+                  "BMR",
+                  "Urate",
+                  "IGF-1",
+                  "SHBG",
+                  "WBI",
+                  "LDL")[idx]
+  d_burden_temp=d_z_scores %>% select(trait_temp)
+  colnames(d_burden_temp)="z"
+  gene_num=nrow(d_burden_temp[is.finite(d_burden_temp$z) & !is.na(d_burden_temp$z),])
+  
+  df=d_all_gwas_hits[d_all_gwas_hits$pheno==trait_temp,]
+  df$burden_pval=2 * pnorm(abs(df$max_burden_z), lower.tail = FALSE)
+  
+  df_down05=d_all_gwas_hits_down05[d_all_gwas_hits_down05$pheno==trait_temp,]
+  df_down05$burden_pval=2 * pnorm(abs(df_down05$max_burden_z), lower.tail = FALSE)
+  df_down025=d_all_gwas_hits_down025[d_all_gwas_hits_down025$pheno==trait_temp,]
+  df_down025$burden_pval=2 * pnorm(abs(df_down025$max_burden_z), lower.tail = FALSE)
+  
+  df[df$pval==0,]$pval=min(df[df$pval>0]$pval,na.rm = T)
+  df[df$burden_pval==0,]$burden_pval=min(df[df$burden_pval>0]$burden_pval,na.rm = T)
+  
+  df_down05[df_down05$pval==0,]$pval=min(df_down05[df_down05$pval>0]$pval,na.rm = T)
+  df_down05[df_down05$burden_pval==0,]$burden_pval=min(df_down05[df_down05$burden_pval>0]$burden_pval,na.rm = T)
+  df_down025[df_down025$pval==0,]$pval=min(df_down025[df_down025$pval>0]$pval,na.rm = T)
+  df_down025[df_down025$burden_pval==0,]$burden_pval=min(df_down025[df_down025$burden_pval>0]$burden_pval,na.rm = T)
+  
+  df$log_gwas_p=-log10(df$pval)
+  df$log_burden_p = -log10(df$burden_pval)
+  
+  df_down05$log_gwas_p=-log10(df_down05$pval)
+  df_down05$log_burden_p = -log10(df_down05$burden_pval)
+  df_down025$log_gwas_p=-log10(df_down025$pval)
+  df_down025$log_burden_p = -log10(df_down025$burden_pval)
+  
+  burden_cutoff=-log10(0.05/gene_num)
+  gwas_cutoff=-log10(5e-8)
+  
+  
+  p1 <- ggplot(df, aes(x=log_gwas_p, y=log_burden_p)) +
+    geom_point(aes(x=log_gwas_p, y=log_burden_p, color='Full sample'), size=1.1, alpha=0.65) +
+    geom_point(aes(x=log_gwas_p, y=log_burden_p, color='Half sample'), data=df_down05, size=1.1, alpha=0.65) +
+    geom_point(aes(x=log_gwas_p, y=log_burden_p, color='Quarter sample'), data=df_down025, size=1.1,alpha=0.65) +
+    scale_color_manual(values = c('Full sample' = "purple","Half sample"= "blue", 'Quarter sample'='orange')) +
+    geom_hline(yintercept = burden_cutoff, color = "red", linetype = "dashed") +
+    geom_vline(xintercept = gwas_cutoff, linetype = "dashed",color = "red") +
+    scale_x_continuous(breaks = seq(0, 302, by = 50)) +
+    xlab(expression(paste(-log[10], " p (GWAS)"))) +
+    ylab(expression(paste(-log[10], " min p (burden) in GWAS locus"))) +
+    theme_cowplot(9) +
+    theme(legend.position="none") +
+    ggtitle(trait_name)
+  
+  to_plot[[idx]] <- p1
+}
+
+to_plot_full <- plot_grid(to_plot[[1]], to_plot[[2]], to_plot[[3]], to_plot[[4]], to_plot[[5]],
+                          to_plot[[6]], to_plot[[7]], to_plot[[8]], to_plot[[9]],
+                          nrow=3, ncol=3, byrow=TRUE)
+
+save_plot('paper_figures/figS22.pdf', to_plot_full, base_width = 3*3, base_height = 3*3)
+
+
+
+
+##### Subsampling burden rank plots
+
+d_all_gwas_hits=fread("data/all_gwas_hits_pval_max_maf_0.5_downsample_.txt")
+d_all_gwas_hits_down05=fread("data/all_gwas_hits_pval_max_maf_0.5_downsample_0.5.txt")
+d_all_gwas_hits_down025=fread("data/all_gwas_hits_pval_max_maf_0.5_downsample_0.25.txt")
+
+d_gene_info=fread("data/genes.v46.gtf")
+d_z_scores=fread("data/zscores_by_trait_MAF1_hgncIDs.txt") # burden z scores
+d_z_scores=d_z_scores[d_z_scores$hgnc_id %in% d_gene_info$hgnc_id,] 
+
+selected_traits=c("50_irnt","3062_irnt","23106_irnt",
+                  "30780_irnt","30760_irnt","23105_irnt",
+                  "30830_irnt", "30880_irnt","30770_irnt",
+                  "30050_irnt","30100_irnt","30010_irnt")
+for (trait_temp in selected_traits){
+  d_burden_temp=d_z_scores %>% select(hgnc_id, trait_temp)
+  colnames(d_burden_temp)[2] = "z"
+  # gene_num=nrow(d_burden_temp[is.finite(d_burden_temp$z) & !is.na(d_burden_temp$z),])
+  gene_num = 18524
+  d_burden_temp$pval = 2 * pnorm(abs(d_burden_temp$z), lower.tail = FALSE)
+  
+  df=d_all_gwas_hits[d_all_gwas_hits$pheno==trait_temp,]
+  df_down05=d_all_gwas_hits_down05[d_all_gwas_hits_down05$pheno==trait_temp,]
+  df_down025=d_all_gwas_hits_down025[d_all_gwas_hits_down025$pheno==trait_temp,]
+  
+  d_burden_temp = d_burden_temp %>% 
+    arrange(pval) %>% 
+    filter(pval <= 0.05/gene_num) %>% 
+    add_column(gwas_locus_rank=Inf) %>%
+    add_column(gwas_locus_rank_down05=Inf) %>%
+    add_column(gwas_locus_rank_down025=Inf)
+  
+  print(trait_temp)
+  print(c(dim(d_burden_temp)[1], coloc_gene_counts$burden_genes[coloc_gene_counts$pheno==trait_temp]))
+  for(idx in 1:dim(d_burden_temp)[1]){
+    match = str_detect(df$burden_gene_coloc, d_burden_temp$hgnc_id[idx])
+    match_down05 = str_detect(df_down05$burden_gene_coloc, d_burden_temp$hgnc_id[idx])
+    match_down025 = str_detect(df_down025$burden_gene_coloc, d_burden_temp$hgnc_id[idx])
+    if(sum(match) == 1){
+      d_burden_temp$gwas_locus_rank[idx] = which(match) # / dim(df)[1]
+    }
+    if(sum(match) > 1){
+      d_burden_temp$gwas_locus_rank[idx] = which(match)[1] # / dim(df)[1]
+    }
+    
+    if(sum(match_down05) == 1){
+      d_burden_temp$gwas_locus_rank_down05[idx] = which(match_down05) # / dim(df)[1]
+    }
+    if(sum(match_down05) > 1){
+      d_burden_temp$gwas_locus_rank_down05[idx] = which(match_down05)[1] # / dim(df)[1]
+    }
+    
+    if(sum(match_down025) == 1){
+      d_burden_temp$gwas_locus_rank_down025[idx] = which(match_down025) # / dim(df)[1]
+    }
+    if(sum(match_down025) > 1){
+      d_burden_temp$gwas_locus_rank_down025[idx] = which(match_down025)[1] # / dim(df)[1]
+    }
+  }
+  trait = coloc_selected$name[coloc_selected$pheno==trait_temp]
+  d_burden_temp = d_burden_temp %>% add_column(trait=trait) %>% add_column(count=1) %>% map_df(rev)
+  if(trait == 'Height'){
+    to_save = d_burden_temp 
+  } else {
+    to_save = rbind(to_save, d_burden_temp)
+  }
+}
+
+p1 <- ggplot(to_save, aes(x = trait, y = count, fill = "black")) +
+  geom_bar(stat = "identity", color = "black", width = 0.7, aes(fill=gwas_locus_rank)) +
+  scale_fill_viridis(direction=-1, begin=0.3, na.value='black',
+                     guide=guide_colorbar(ticks=F, reverse=TRUE), limits=c(0,325)) + 
+  labs(x = "", y = "Burden hits") +
+  scale_y_continuous(breaks = c()) +
+  theme_cowplot(9) +
+  ggtitle('Full sample') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.title = element_blank(),
+        # legend.text = element_blank(),
+        legend.position= "none")
+
+p2 <- ggplot(to_save, aes(x = trait, y = count, fill = "black")) +
+  geom_bar(stat = "identity", color = "black", width = 0.7, aes(fill=gwas_locus_rank_down05)) +
+  scale_fill_viridis(direction=-1, begin=0.3, na.value='black',
+                     guide=guide_colorbar(ticks=F, reverse=TRUE), limits=c(0,325)) + 
+  labs(x = "", y = "Burden hits") +
+  scale_y_continuous(breaks = c()) +
+  theme_cowplot(9) +
+  ggtitle('Half sample') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.title = element_blank(),
+        # legend.text = element_blank(),
+        legend.position = "none")
+
+p3 <- ggplot(to_save, aes(x = trait, y = count, fill = "black")) +
+  geom_bar(stat = "identity", color = "black", width = 0.7, aes(fill=gwas_locus_rank_down025)) +
+  scale_fill_viridis(direction=-1, begin=0.3, na.value='black',
+                     guide=guide_colorbar(ticks=F, reverse=TRUE), limits=c(0,325)) + 
+  labs(x = "", y = "Burden hits") +
+  scale_y_continuous(breaks = c()) +
+  theme_cowplot(9) +
+  ggtitle('Quarter sample') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.title = element_blank(),
+        # legend.text = element_blank(),
+        legend.position = c(0.6, 0.7))
+
+to_plot_full <- plot_grid(p1, p2, p3,
+                          nrow=1, ncol=3, byrow=TRUE)
+
+outfile=paste0("paper_figures/figS20.pdf")
+save_plot(outfile, to_plot_full,base_width = 3*2.8, base_height = 5)
+
+
+
+#########################
+### Figure S23-25 ###
+#########################
+d_all_gwas_hits_missense=fread("data/all_gwas_hits_missense.txt")
+d_all_gwas_hits=fread("data/all_gwas_hits.txt")
+
+d_gene_info=fread("data/genes.v46.gtf")
+d_z_scores_missense=fread("data/zscores_by_trait_MAF1_missense_hgncIDs.txt") # burden z scores
+d_z_scores_missense=d_z_scores_missense[d_z_scores_missense$hgnc_id %in% d_gene_info$hgnc_id,] 
+d_z_scores=fread("data/zscores_by_trait_MAF1_missense_hgncIDs.txt") # burden z scores
+d_z_scores=d_z_scores[d_z_scores$hgnc_id %in% d_gene_info$hgnc_id,] 
+
+
+for (trait_temp in selected_traits){
+  d_burden_temp=d_z_scores_missense %>% select(hgnc_id, trait_temp)
+  colnames(d_burden_temp)[2] = "z"
+  # gene_num=nrow(d_burden_temp[is.finite(d_burden_temp$z) & !is.na(d_burden_temp$z),])
+  gene_num = 18524
+  d_burden_temp$pval = 2 * pnorm(abs(d_burden_temp$z), lower.tail = FALSE)
+  
+  df=d_all_gwas_hits_missense[d_all_gwas_hits_missense$pheno==trait_temp,]
+  
+  d_burden_temp = d_burden_temp %>% 
+    arrange(pval) %>% 
+    filter(pval <= 0.05/gene_num) %>% 
+    add_column(gwas_locus_rank=Inf)
+  
+  print(trait_temp)
+  print(c(dim(d_burden_temp)[1], coloc_gene_counts$burden_genes[coloc_gene_counts$pheno==trait_temp]))
+  for(idx in 1:dim(d_burden_temp)[1]){
+    match = str_detect(df$burden_gene_coloc, d_burden_temp$hgnc_id[idx])
+    if(sum(match) == 1){
+      d_burden_temp$gwas_locus_rank[idx] = which(match) # / dim(df)[1]
+    }
+    if(sum(match) > 1){
+      d_burden_temp$gwas_locus_rank[idx] = which(match)[1] # / dim(df)[1]
+      # print('uh oh!')
+      # print(which(match))
+      # print(d_burden_temp$hgnc_id[idx])
+      # print(idx)
+    }
+  }
+  trait = coloc_selected$name[coloc_selected$pheno==trait_temp]
+  d_burden_temp = d_burden_temp %>% add_column(trait=trait) %>% add_column(count=1) %>% map_df(rev)
+  if(trait == 'Height'){
+    to_save = d_burden_temp 
+  } else {
+    to_save = rbind(to_save, d_burden_temp)
+  }
+}
+
+p1 <- ggplot(to_save, aes(x = trait, y = count, fill = "black")) +
+  geom_bar(stat = "identity", color = "black", width = 0.7, aes(fill=gwas_locus_rank)) +
+  scale_fill_viridis(direction=-1, begin=0.3, na.value='black',
+                     guide=guide_colorbar(ticks=F, reverse=TRUE)) + 
+  labs(x = "", y = "Burden hits") +
+  scale_y_continuous(breaks = c()) +
+  theme_cowplot(9) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.title = element_blank(),
+        # legend.text = element_blank(),
+        legend.position = c(0.6, 0.7))
+outfile=paste0("paper_figures/figS23.pdf")
+save_plot(outfile, p1,base_width = 3, base_height = 8)
+
+
+
+
+trait_temp = '50_irnt'
+trait_name = 'Height'
+
+d_burden_temp=d_z_scores %>% select(trait_temp)
+colnames(d_burden_temp)="z"
+gene_num=nrow(d_burden_temp[is.finite(d_burden_temp$z) & !is.na(d_burden_temp$z),])
+
+df=d_all_gwas_hits[d_all_gwas_hits$pheno==trait_temp,]
+df$burden_pval=2 * pnorm(abs(df$max_burden_z), lower.tail = FALSE)
+
+df[df$pval==0,]$pval=min(df[df$pval>0]$pval,na.rm = T)
+df[df$burden_pval==0,]$burden_pval=min(df[df$burden_pval>0]$burden_pval,na.rm = T)
+
+df$log_gwas_p=-log10(df$pval)
+df$log_burden_p = -log10(df$burden_pval)
+
+
+df_missense=d_all_gwas_hits_missense[d_all_gwas_hits_missense$pheno==trait_temp,]
+df_missense$burden_pval=2 * pnorm(abs(df_missense$max_burden_z), lower.tail = FALSE)
+
+df_missense[df_missense$pval==0,]$pval=min(df_missense[df_missense$pval>0]$pval,na.rm = T)
+df_missense[df_missense$burden_pval==0,]$burden_pval=min(df_missense[df_missense$burden_pval>0]$burden_pval,na.rm = T)
+
+df_missense$log_gwas_p=-log10(df_missense$pval)
+df_missense$log_burden_p = -log10(df_missense$burden_pval)
+
+burden_cutoff=-log10(0.05/gene_num)
+gwas_cutoff=-log10(5e-8)
+
+p1 <- ggplot(df, aes(x=log_gwas_p, y=log_burden_p)) +
+  geom_point(aes(x=log_gwas_p, y=log_burden_p, color='LoFs Only'), size=1.1,alpha=0.65) +
+  geom_point(aes(x=log_gwas_p, y=log_burden_p, color='LoFs + Missense'), data=df_missense, size=1.1,alpha=0.65) +
+  scale_color_manual(values = c('LoFs Only' = "purple", 'LoFs + Missense'='orange')) +
+  geom_hline(yintercept = burden_cutoff, color = "red", linetype = "dashed") +
+  geom_vline(xintercept = gwas_cutoff, linetype = "dashed",color = "red") +
+  scale_x_continuous(breaks = seq(0, 302, by = 50)) +
+  xlab(expression(paste(-log[10], " p (GWAS)"))) +
+  ylab(expression(paste(-log[10], " min p (burden) in GWAS locus"))) +
+  theme_cowplot(9) +
+  theme(legend.title = element_blank()) +
+  ggtitle(trait_name)
+
+outfile=paste0("paper_figures/figS24.pdf")
+save_plot(outfile, p1, base_width = 5, base_height = 3)
+
+
+to_plot <- list()
+for(idx in 1:10){
+  trait_temp <- c("30050_irnt",
+                  "30100_irnt",
+                  "30010_irnt",
+                  "30760_irnt",
+                  "23105_irnt",
+                  "30880_irnt",
+                  "30770_irnt",
+                  "30830_irnt",
+                  "23106_irnt",
+                  "30780_irnt")[idx]
+  trait_name <- c("MCH",
+                  "MPV",
+                  "RBC count",
+                  "HDL",
+                  "BMR",
+                  "Urate",
+                  "IGF-1",
+                  "SHBG",
+                  "WBI",
+                  "LDL")[idx]
+  d_burden_temp=d_z_scores %>% select(trait_temp)
+  colnames(d_burden_temp)="z"
+  gene_num=nrow(d_burden_temp[is.finite(d_burden_temp$z) & !is.na(d_burden_temp$z),])
+  
+  df=d_all_gwas_hits[d_all_gwas_hits$pheno==trait_temp,]
+  df$burden_pval=2 * pnorm(abs(df$max_burden_z), lower.tail = FALSE)
+  
+  df[df$pval==0,]$pval=min(df[df$pval>0]$pval,na.rm = T)
+  df[df$burden_pval==0,]$burden_pval=min(df[df$burden_pval>0]$burden_pval,na.rm = T)
+  
+  df$log_gwas_p=-log10(df$pval)
+  df$log_burden_p = -log10(df$burden_pval)
+  
+  
+  df_missense=d_all_gwas_hits_missense[d_all_gwas_hits_missense$pheno==trait_temp,]
+  df_missense$burden_pval=2 * pnorm(abs(df_missense$max_burden_z), lower.tail = FALSE)
+  
+  df_missense[df_missense$pval==0,]$pval=min(df_missense[df_missense$pval>0]$pval,na.rm = T)
+  df_missense[df_missense$burden_pval==0,]$burden_pval=min(df_missense[df_missense$burden_pval>0]$burden_pval,na.rm = T)
+  
+  df_missense$log_gwas_p=-log10(df_missense$pval)
+  df_missense$log_burden_p = -log10(df_missense$burden_pval)
+  
+  burden_cutoff=-log10(0.05/gene_num)
+  gwas_cutoff=-log10(5e-8)
+  
+  p1 <- ggplot(df, aes(x=log_gwas_p, y=log_burden_p)) +
+    geom_point(aes(x=log_gwas_p, y=log_burden_p, color='LoFs Only'), size=1.1,alpha=0.65) +
+    geom_point(aes(x=log_gwas_p, y=log_burden_p, color='LoFs + Missense'), data=df_missense, size=1.1,alpha=0.65) +
+    scale_color_manual(values = c('LoFs Only' = "purple", 'LoFs + Missense'='orange')) +
+    geom_hline(yintercept = burden_cutoff, color = "red", linetype = "dashed") +
+    geom_vline(xintercept = gwas_cutoff, linetype = "dashed",color = "red") +
+    scale_x_continuous(breaks = seq(0, 302, by = 50)) +
+    xlab(expression(paste(-log[10], " p (GWAS)"))) +
+    ylab(expression(paste(-log[10], " min p (burden) in GWAS locus"))) +
+    theme_cowplot(9) +
+    theme(legend.position="none") +
+    ggtitle(trait_name)
+  
+  
+  to_plot[[idx]] <- p1
+}
+
+to_plot_full <- plot_grid(to_plot[[1]], to_plot[[2]], to_plot[[3]], to_plot[[4]], to_plot[[5]],
+                          to_plot[[6]], to_plot[[7]], to_plot[[8]], to_plot[[9]],
+                          nrow=3, ncol=3, byrow=TRUE)
+
+save_plot('paper_figures/figS25.pdf', to_plot_full, base_width = 3*3, base_height = 3*3)
+
+
+
+
+
+
+#########################
+### Figure S26-28 ###
+#########################
+
+
+#### Height (effect of MAF)
+d_all_gwas_hits=fread("data/all_gwas_hits_pval_max_maf_0.5_downsample_.txt")
+d_all_gwas_hits_down05=fread("data/all_gwas_hits_pval_max_maf_0.1_downsample_.txt")
+d_all_gwas_hits_down025=fread("data/all_gwas_hits_pval_max_maf_0.01_downsample_.txt")
+
+
+trait_temp = '50_irnt'
+trait_name= 'height'
+d_burden_temp=d_z_scores %>% select(trait_temp)
+colnames(d_burden_temp)="z"
+gene_num=nrow(d_burden_temp[is.finite(d_burden_temp$z) & !is.na(d_burden_temp$z),])
+
+df=d_all_gwas_hits[d_all_gwas_hits$pheno==trait_temp,]
+df$burden_pval=2 * pnorm(abs(df$max_burden_z), lower.tail = FALSE)
+
+df_down05=d_all_gwas_hits_down05[d_all_gwas_hits_down05$pheno==trait_temp,]
+df_down05$burden_pval=2 * pnorm(abs(df_down05$max_burden_z), lower.tail = FALSE)
+df_down025=d_all_gwas_hits_down025[d_all_gwas_hits_down025$pheno==trait_temp,]
+df_down025$burden_pval=2 * pnorm(abs(df_down025$max_burden_z), lower.tail = FALSE)
+
+df[df$pval==0,]$pval=min(df[df$pval>0]$pval,na.rm = T)
+df[df$burden_pval==0,]$burden_pval=min(df[df$burden_pval>0]$burden_pval,na.rm = T)
+
+df_down05[df_down05$pval==0,]$pval=min(df_down05[df_down05$pval>0]$pval,na.rm = T)
+df_down05[df_down05$burden_pval==0,]$burden_pval=min(df_down05[df_down05$burden_pval>0]$burden_pval,na.rm = T)
+df_down025[df_down025$pval==0,]$pval=min(df_down025[df_down025$pval>0]$pval,na.rm = T)
+df_down025[df_down025$burden_pval==0,]$burden_pval=min(df_down025[df_down025$burden_pval>0]$burden_pval,na.rm = T)
+
+df$log_gwas_p=-log10(df$pval)
+df$log_burden_p = -log10(df$burden_pval)
+
+df_down05$log_gwas_p=-log10(df_down05$pval)
+df_down05$log_burden_p = -log10(df_down05$burden_pval)
+df_down025$log_gwas_p=-log10(df_down025$pval)
+df_down025$log_burden_p = -log10(df_down025$burden_pval)
+
+burden_cutoff=-log10(0.05/gene_num)
+gwas_cutoff=-log10(5e-8)
+
+p1 <- ggplot(df, aes(x=log_gwas_p, y=log_burden_p)) +
+  geom_point(aes(x=log_gwas_p, y=log_burden_p, color='MAF ≤ 0.5'), size=1.1, alpha=0.65) +
+  geom_point(aes(x=log_gwas_p, y=log_burden_p, color='MAF ≤ 0.1'), data=df_down05, size=1.1, alpha=0.65) +
+  geom_point(aes(x=log_gwas_p, y=log_burden_p, color='MAF ≤ 0.01'), data=df_down025, size=1.1,alpha=0.65) +
+  scale_color_manual(values = c('MAF ≤ 0.5' = "purple","MAF ≤ 0.1"= "blue", 'MAF ≤ 0.01'='orange')) +
+  geom_hline(yintercept = burden_cutoff, color = "red", linetype = "dashed") +
+  geom_vline(xintercept = gwas_cutoff, linetype = "dashed",color = "red") +
+  scale_x_continuous(breaks = seq(0, 302, by = 50)) +
+  xlab(expression(paste(-log[10], " p (GWAS)"))) +
+  ylab(expression(paste(-log[10], " min p (burden) in GWAS locus"))) +
+  theme_cowplot(9) +
+  theme(legend.title = element_blank()) +
+  ggtitle(trait_name)
+
+outfile=paste0("paper_figures/figS27.pdf")
+save_plot(outfile, p1, base_width = 5, base_height = 3)
+
+
+to_plot <- list()
+for(idx in 1:10){
+  trait_temp <- c("30050_irnt",
+                  "30100_irnt",
+                  "30010_irnt",
+                  "30760_irnt",
+                  "23105_irnt",
+                  "30880_irnt",
+                  "30770_irnt",
+                  "30830_irnt",
+                  "23106_irnt",
+                  "30780_irnt")[idx]
+  trait_name <- c("MCH",
+                  "MPV",
+                  "RBC count",
+                  "HDL",
+                  "BMR",
+                  "Urate",
+                  "IGF-1",
+                  "SHBG",
+                  "WBI",
+                  "LDL")[idx]
+  d_burden_temp=d_z_scores %>% select(trait_temp)
+  colnames(d_burden_temp)="z"
+  gene_num=nrow(d_burden_temp[is.finite(d_burden_temp$z) & !is.na(d_burden_temp$z),])
+  
+  df=d_all_gwas_hits[d_all_gwas_hits$pheno==trait_temp,]
+  df$burden_pval=2 * pnorm(abs(df$max_burden_z), lower.tail = FALSE)
+  
+  df_down05=d_all_gwas_hits_down05[d_all_gwas_hits_down05$pheno==trait_temp,]
+  df_down05$burden_pval=2 * pnorm(abs(df_down05$max_burden_z), lower.tail = FALSE)
+  df_down025=d_all_gwas_hits_down025[d_all_gwas_hits_down025$pheno==trait_temp,]
+  df_down025$burden_pval=2 * pnorm(abs(df_down025$max_burden_z), lower.tail = FALSE)
+  
+  df[df$pval==0,]$pval=min(df[df$pval>0]$pval,na.rm = T)
+  df[df$burden_pval==0,]$burden_pval=min(df[df$burden_pval>0]$burden_pval,na.rm = T)
+  
+  df_down05[df_down05$pval==0,]$pval=min(df_down05[df_down05$pval>0]$pval,na.rm = T)
+  df_down05[df_down05$burden_pval==0,]$burden_pval=min(df_down05[df_down05$burden_pval>0]$burden_pval,na.rm = T)
+  df_down025[df_down025$pval==0,]$pval=min(df_down025[df_down025$pval>0]$pval,na.rm = T)
+  df_down025[df_down025$burden_pval==0,]$burden_pval=min(df_down025[df_down025$burden_pval>0]$burden_pval,na.rm = T)
+  
+  df$log_gwas_p=-log10(df$pval)
+  df$log_burden_p = -log10(df$burden_pval)
+  
+  df_down05$log_gwas_p=-log10(df_down05$pval)
+  df_down05$log_burden_p = -log10(df_down05$burden_pval)
+  df_down025$log_gwas_p=-log10(df_down025$pval)
+  df_down025$log_burden_p = -log10(df_down025$burden_pval)
+  
+  burden_cutoff=-log10(0.05/gene_num)
+  gwas_cutoff=-log10(5e-8)
+  
+  p1 <- ggplot(df, aes(x=log_gwas_p, y=log_burden_p)) +
+    geom_point(aes(x=log_gwas_p, y=log_burden_p, color='MAF ≤ 0.5'), size=1.1, alpha=0.65) +
+    geom_point(aes(x=log_gwas_p, y=log_burden_p, color='MAF ≤ 0.1'), data=df_down05, size=1.1, alpha=0.65) +
+    geom_point(aes(x=log_gwas_p, y=log_burden_p, color='MAF ≤ 0.01'), data=df_down025, size=1.1,alpha=0.65) +
+    scale_color_manual(values = c('MAF ≤ 0.5' = "purple","MAF ≤ 0.1"= "blue", 'MAF ≤ 0.01'='orange')) +
+    geom_hline(yintercept = burden_cutoff, color = "red", linetype = "dashed") +
+    geom_vline(xintercept = gwas_cutoff, linetype = "dashed",color = "red") +
+    scale_x_continuous(breaks = seq(0, 302, by = 50)) +
+    xlab(expression(paste(-log[10], " p (GWAS)"))) +
+    ylab(expression(paste(-log[10], " min p (burden) in GWAS locus"))) +
+    theme_cowplot(9) +
+    theme(legend.position="none") +
+    ggtitle(trait_name)
+  
+  to_plot[[idx]] <- p1
+}
+
+to_plot_full <- plot_grid(to_plot[[1]], to_plot[[2]], to_plot[[3]], to_plot[[4]], to_plot[[5]],
+                          to_plot[[6]], to_plot[[7]], to_plot[[8]], to_plot[[9]],
+                          nrow=3, ncol=3, byrow=TRUE)
+
+save_plot('paper_figures/figS28.pdf', to_plot_full, base_width = 3*3, base_height = 3*3)
+
+
+d_all_gwas_hits=fread("data/all_gwas_hits_pval_max_maf_0.5_downsample_.txt")
+d_all_gwas_hits_down05=fread("data/all_gwas_hits_pval_max_maf_0.1_downsample_.txt")
+d_all_gwas_hits_down025=fread("data/all_gwas_hits_pval_max_maf_0.01_downsample_.txt")
+
+d_gene_info=fread("data/genes.v46.gtf")
+d_z_scores=fread("data/zscores_by_trait_MAF1_hgncIDs.txt") # burden z scores
+d_z_scores=d_z_scores[d_z_scores$hgnc_id %in% d_gene_info$hgnc_id,] 
+
+selected_traits=c("50_irnt","3062_irnt","23106_irnt",
+                  "30780_irnt","30760_irnt","23105_irnt",
+                  "30830_irnt", "30880_irnt","30770_irnt",
+                  "30050_irnt","30100_irnt","30010_irnt")
+for (trait_temp in selected_traits){
+  d_burden_temp=d_z_scores %>% select(hgnc_id, trait_temp)
+  colnames(d_burden_temp)[2] = "z"
+  # gene_num=nrow(d_burden_temp[is.finite(d_burden_temp$z) & !is.na(d_burden_temp$z),])
+  gene_num = 18524
+  d_burden_temp$pval = 2 * pnorm(abs(d_burden_temp$z), lower.tail = FALSE)
+  
+  df=d_all_gwas_hits[d_all_gwas_hits$pheno==trait_temp,]
+  df_down05=d_all_gwas_hits_down05[d_all_gwas_hits_down05$pheno==trait_temp,]
+  df_down025=d_all_gwas_hits_down025[d_all_gwas_hits_down025$pheno==trait_temp,]
+  
+  d_burden_temp = d_burden_temp %>% 
+    arrange(pval) %>% 
+    filter(pval <= 0.05/gene_num) %>% 
+    add_column(gwas_locus_rank=Inf) %>%
+    add_column(gwas_locus_rank_down05=Inf) %>%
+    add_column(gwas_locus_rank_down025=Inf)
+  
+  print(trait_temp)
+  print(c(dim(d_burden_temp)[1], coloc_gene_counts$burden_genes[coloc_gene_counts$pheno==trait_temp]))
+  for(idx in 1:dim(d_burden_temp)[1]){
+    match = str_detect(df$burden_gene_coloc, d_burden_temp$hgnc_id[idx])
+    match_down05 = str_detect(df_down05$burden_gene_coloc, d_burden_temp$hgnc_id[idx])
+    match_down025 = str_detect(df_down025$burden_gene_coloc, d_burden_temp$hgnc_id[idx])
+    if(sum(match) == 1){
+      d_burden_temp$gwas_locus_rank[idx] = which(match) # / dim(df)[1]
+    }
+    if(sum(match) > 1){
+      d_burden_temp$gwas_locus_rank[idx] = which(match)[1] # / dim(df)[1]
+    }
+    
+    if(sum(match_down05) == 1){
+      d_burden_temp$gwas_locus_rank_down05[idx] = which(match_down05) # / dim(df)[1]
+    }
+    if(sum(match_down05) > 1){
+      d_burden_temp$gwas_locus_rank_down05[idx] = which(match_down05)[1] # / dim(df)[1]
+    }
+    
+    if(sum(match_down025) == 1){
+      d_burden_temp$gwas_locus_rank_down025[idx] = which(match_down025) # / dim(df)[1]
+    }
+    if(sum(match_down025) > 1){
+      d_burden_temp$gwas_locus_rank_down025[idx] = which(match_down025)[1] # / dim(df)[1]
+    }
+  }
+  trait = coloc_selected$name[coloc_selected$pheno==trait_temp]
+  d_burden_temp = d_burden_temp %>% add_column(trait=trait) %>% add_column(count=1) %>% map_df(rev)
+  if(trait == 'Height'){
+    to_save = d_burden_temp 
+  } else {
+    to_save = rbind(to_save, d_burden_temp)
+  }
+}
+
+p1 <- ggplot(to_save, aes(x = trait, y = count, fill = "black")) +
+  geom_bar(stat = "identity", color = "black", width = 0.7, aes(fill=gwas_locus_rank)) +
+  scale_fill_viridis(direction=-1, begin=0.3, na.value='black',
+                     guide=guide_colorbar(ticks=F, reverse=TRUE), limits=c(0,325)) + 
+  labs(x = "", y = "Burden hits") +
+  scale_y_continuous(breaks = c()) +
+  theme_cowplot(9) +
+  ggtitle('MAF ≤ 0.5') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.title = element_blank(),
+        # legend.text = element_blank(),
+        legend.position= "none")
+
+p2 <- ggplot(to_save, aes(x = trait, y = count, fill = "black")) +
+  geom_bar(stat = "identity", color = "black", width = 0.7, aes(fill=gwas_locus_rank_down05)) +
+  scale_fill_viridis(direction=-1, begin=0.3, na.value='black',
+                     guide=guide_colorbar(ticks=F, reverse=TRUE), limits=c(0,325)) + 
+  labs(x = "", y = "Burden hits") +
+  scale_y_continuous(breaks = c()) +
+  theme_cowplot(9) +
+  ggtitle('MAF ≤ 0.1') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.title = element_blank(),
+        # legend.text = element_blank(),
+        legend.position = "none")
+
+p3 <- ggplot(to_save, aes(x = trait, y = count, fill = "black")) +
+  geom_bar(stat = "identity", color = "black", width = 0.7, aes(fill=gwas_locus_rank_down025)) +
+  scale_fill_viridis(direction=-1, begin=0.3, na.value='black',
+                     guide=guide_colorbar(ticks=F, reverse=TRUE), limits=c(0,325)) + 
+  labs(x = "", y = "Burden hits") +
+  scale_y_continuous(breaks = c()) +
+  theme_cowplot(9) +
+  ggtitle('MAF ≤ 0.01') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.title = element_blank(),
+        # legend.text = element_blank(),
+        legend.position = c(0.6, 0.7))
+
+to_plot_full <- plot_grid(p1, p2, p3,
+                          nrow=1, ncol=3, byrow=TRUE)
+
+outfile=paste0("paper_figures/figS26.pdf")
+save_plot(outfile, to_plot_full,base_width = 3*2.8, base_height = 5)
+
+
+
+
+
+#########################
+### Figure S29-31 ###
+#########################
+d_all_gwas_hits=fread("data/all_gwas_hits_beta_max_maf_0.5_downsample_.txt")
+
+
+trait_temp = '50_irnt'
+trait_name= 'height'
+d_burden_temp=d_z_scores %>% select(trait_temp)
+colnames(d_burden_temp)="z"
+gene_num=nrow(d_burden_temp[is.finite(d_burden_temp$z) & !is.na(d_burden_temp$z),])
+
+df=d_all_gwas_hits[d_all_gwas_hits$pheno==trait_temp,]
+df$max_sig_burden_gamma = pmax(df$max_sig_burden_gamma, 0)
+
+p1 <- ggplot(df, aes(x=abs(beta), y=max_sig_burden_gamma)) +
+  geom_point(size=1.1, alpha=0.65) +
+  xlab("Largest significant effect size, GWAS") +
+  ylab("Largest significant effect size, burden") +
+  theme_cowplot(9) +
+  theme(legend.title = element_blank())
+
+outfile=paste0("paper_figures/figS30.pdf")
+save_plot(outfile, p1, base_width = 3, base_height = 3)
+
+
+to_plot <- list()
+for(idx in 1:10){
+  trait_temp <- c("30050_irnt",
+                  "30100_irnt",
+                  "30010_irnt",
+                  "30760_irnt",
+                  "23105_irnt",
+                  "30880_irnt",
+                  "30770_irnt",
+                  "30830_irnt",
+                  "23106_irnt",
+                  "30780_irnt")[idx]
+  trait_name <- c("MCH",
+                  "MPV",
+                  "RBC count",
+                  "HDL",
+                  "BMR",
+                  "Urate",
+                  "IGF-1",
+                  "SHBG",
+                  "WBI",
+                  "LDL")[idx]
+  d_burden_temp=d_z_scores %>% select(trait_temp)
+  colnames(d_burden_temp)="z"
+  gene_num=nrow(d_burden_temp[is.finite(d_burden_temp$z) & !is.na(d_burden_temp$z),])
+  
+  df=d_all_gwas_hits[d_all_gwas_hits$pheno==trait_temp,]
+  df$max_sig_burden_gamma = pmax(df$max_sig_burden_gamma, 0)
+  
+  p1 <- ggplot(df, aes(x=abs(beta), y=max_sig_burden_gamma)) +
+    geom_point(size=1.1, alpha=0.65) +
+    xlab("Largest significant effect size, GWAS") +
+    ylab("Largest significant effect size, burden") +
+    theme_cowplot(9) +
+    theme(legend.title = element_blank()) +
+    ggtitle(trait_name)
+  
+  to_plot[[idx]] <- p1
+}
+
+to_plot_full <- plot_grid(to_plot[[1]], to_plot[[2]], to_plot[[3]], to_plot[[4]], to_plot[[5]],
+                          to_plot[[6]], to_plot[[7]], to_plot[[8]], to_plot[[9]],
+                          nrow=3, ncol=3, byrow=TRUE)
+
+save_plot('paper_figures/figS31.pdf', to_plot_full, base_width = 3*3, base_height = 3*3)
+
+
+
+
+##### Subsampling burden rank plots
+
+d_all_gwas_hits=fread("data/all_gwas_hits_beta_max_maf_0.5_downsample_.txt")
+
+d_gene_info=fread("data/genes.v46.gtf")
+d_z_scores=fread("data/zscores_by_trait_MAF1_hgncIDs.txt") # burden z scores
+d_gamma_hat=fread("data/gamma_hats_by_trait_MAF1_hgncIDs.txt")
+
+d_z_scores=d_z_scores[d_z_scores$hgnc_id %in% d_gene_info$hgnc_id,] 
+d_gamma_hat=d_gamma_hat[d_gamma_hat$hgnc_id %in% d_gene_info$hgnc_id,]
+
+d_z_scores = merge(d_z_scores, d_gamma_hat, by='hgnc_id', suffixes=c('_z', '_gamma'))
+
+selected_traits=c("50_irnt","3062_irnt","23106_irnt",
+                  "30780_irnt","30760_irnt","23105_irnt",
+                  "30830_irnt", "30880_irnt","30770_irnt",
+                  "30050_irnt","30100_irnt","30010_irnt")
+for (trait_temp in selected_traits){
+  d_burden_temp=d_z_scores %>% select(hgnc_id, paste0(trait_temp, '_z'), paste0(trait_temp, '_gamma'))
+  colnames(d_burden_temp)[2] = "z"
+  colnames(d_burden_temp)[3] = "gamma"
+  gene_num = 18524
+  d_burden_temp$pval = 2 * pnorm(abs(d_burden_temp$z), lower.tail = FALSE)
+  
+  df=d_all_gwas_hits[d_all_gwas_hits$pheno==trait_temp,]
+  
+  d_burden_temp = d_burden_temp %>% 
+    arrange(-abs(gamma)) %>% 
+    filter(pval <= 0.05/gene_num) %>% 
+    add_column(gwas_locus_rank=Inf)
+  
+  print(trait_temp)
+  print(c(dim(d_burden_temp)[1], coloc_gene_counts$burden_genes[coloc_gene_counts$pheno==trait_temp]))
+  for(idx in 1:dim(d_burden_temp)[1]){
+    match = str_detect(df$burden_gene_coloc, d_burden_temp$hgnc_id[idx])
+    if(sum(match) == 1){
+      d_burden_temp$gwas_locus_rank[idx] = which(match) # / dim(df)[1]
+    }
+    if(sum(match) > 1){
+      d_burden_temp$gwas_locus_rank[idx] = which(match)[1] # / dim(df)[1]
+    }
+  }
+  trait = coloc_selected$name[coloc_selected$pheno==trait_temp]
+  d_burden_temp = d_burden_temp %>% add_column(trait=trait) %>% add_column(count=1) %>% map_df(rev)
+  if(trait == 'Height'){
+    to_save = d_burden_temp 
+  } else {
+    to_save = rbind(to_save, d_burden_temp)
+  }
+}
+
+p1 <- ggplot(to_save, aes(x = trait, y = count, fill = "black")) +
+  geom_bar(stat = "identity", color = "black", width = 0.7, aes(fill=gwas_locus_rank)) +
+  scale_fill_viridis(direction=-1, begin=0.3, na.value='black',
+                     guide=guide_colorbar(ticks=F, reverse=TRUE), limits=c(0,325)) + 
+  labs(x = "", y = "Burden hits") +
+  scale_y_continuous(breaks = c()) +
+  theme_cowplot(9) +
+  ggtitle('Ranked by effect sizes') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.title = element_blank(),
+        # legend.text = element_blank(),
+        legend.position = c(0.6, 0.7))
+
+
+outfile=paste0("paper_figures/figS29.pdf")
+save_plot(outfile, p1,base_width = 3, base_height = 5)
+
+
+
 
 
 
@@ -1015,7 +2513,7 @@ save_plot(outfile, p3,base_width = 3, base_height = 2)
 
 
 #########################
-### Figure S8 ###
+### Figure S32 ###
 #########################
 
 d_indep_traits=fread("data/indep_traits.txt")
@@ -1111,7 +2609,7 @@ p2 <- ggplot(data_sum, aes(x=mean_s, y=mean_plof)) +
   ylab(expression(paste("Mean p"[LoF], " in bin"))) +
   theme_cowplot(9)
 
-outfile=paste0("paper_figures/figS8.pdf")
+outfile=paste0("paper_figures/figS32.pdf")
 save_plot(outfile, p2,base_width = 4.5, base_height = 4)
 
 
@@ -1218,11 +2716,314 @@ save_plot(outfile, p1,base_width = 4.2, base_height = 2)
 
 
 
+#########################
+### Figure S33 ###
+#########################
+
+d_indep_traits=fread("data/indep_traits.txt")
+
+d_s_het=fread("data/zeng_et_al_v3.tsv")
+d_gamma_unbiased=fread("data/unbiased_gamma_sq_by_trait_MAF1_missense_hgncIDs.txt")
+d_gamma_hats=fread("data/gamma_hats_by_trait_MAF1_missense_hgncIDs.txt")
+d_z_scores=fread("data/zscores_by_trait_MAF1_missense_hgncIDs.txt")
+d_SEs=fread("data/SE_hats_by_trait_MAF1_missense_hgncIDs.txt")
+d_plof = read.csv('data/plof_MAF1_hgncIDs.csv')
+
+###
+
+set.seed(0)
+
+traits=sort(unique(d_indep_traits$trait)) 
+traits=traits[!(traits %in% c("20127_irnt","2139_irnt"))]
+
+s_het_bin_size = 100
+colnames(d_s_het)[2]="hgnc_id"
+
+d_s_het=d_s_het[!is.na(d_s_het$post_mean),]
+d_s_het=d_s_het[d_s_het$hgnc_id %in% d_gamma_hats$hgnc_id,]
+d_s_het$s_het_cat=ntile(d_s_het$post_mean,s_het_bin_size)
+
+
+#
+
+d_gamma2_matrix= d_gamma_unbiased %>% dplyr::select(-hgnc_id)  %>% dplyr::select(traits)
+d_SE_matrix= d_SEs %>% dplyr::select(-hgnc_id) %>% dplyr::select(traits)
+d_z_matrix= d_z_scores %>% dplyr::select(-hgnc_id) %>% dplyr::select(traits)
+d_z_matrix=replace(d_z_matrix, is.na(d_z_matrix), 1) #replace NAs with 1
+
+d_test_gamma <- ifelse(abs(d_gamma2_matrix) < 4, 1, 1)
+d_test_se <- ifelse(abs(d_SE_matrix) < 4, 1, 1)
+d_test_z <- ifelse(abs(d_z_matrix) < 4, 1, 1)
+
+d_data=(d_z_scores %>% dplyr::select(hgnc_id))
+d_data$mean_z2=rowMeans(d_z_matrix^2,na.rm = T)
+d_data$mean_gamma2=rowMeans(d_gamma2_matrix,na.rm = T)
+d_data$mean_SE2=rowMeans(d_SE_matrix^2,na.rm = T)
+d_data$mean_SE4=rowMeans(d_SE_matrix^4,na.rm = T)
+d_data$mean_SE2gamma2=rowMeans(d_SE_matrix^2*d_gamma2_matrix,na.rm = T)
+d_data$count_traits_gamma=rowSums(d_test_gamma,na.rm = T)
+d_data$count_traits_se=rowSums(d_test_se,na.rm = T)
+d_data$count_traits_z=rowSums(d_test_z,na.rm = T)
+
+d_data=left_join(d_data, d_s_het %>% dplyr::select(hgnc_id,exp_lof,post_mean,prior_mean,s_het_cat))
+d_data=left_join(d_data, d_plof)
+d_data=d_data[!is.na(d_data$post_mean),]
+
+data_sum <- d_data %>%
+  group_by(s_het_cat) %>%
+  summarize(mean_gamma_sq = mean(mean_gamma2, na.rm = TRUE),
+            mean_se_4 = mean(mean_SE4, na.rm=TRUE),
+            mean_se_4 = mean(mean_SE2gamma2, na.rm=TRUE),
+            mean_se_sq = mean(mean_SE2, na.rm = TRUE),
+            mean_z_sq=mean(mean_z2, na.rm = TRUE),
+            mean_s = mean(post_mean, na.rm = TRUE),
+            sd_gamma_sq = sd(mean_gamma2, na.rm = TRUE),
+            sd_se_sq = sd(mean_SE2, na.rm = TRUE),
+            sd_z_sq = sd(mean_z2, na.rm = TRUE),
+            count_gamma_sq = sum(count_traits_gamma),
+            count_se_sq = sum(count_traits_se),
+            count_z_sq = sum(count_traits_z),
+            mean_plof = mean(effect_allele_frequency, na.rm=TRUE)
+  )
+
+data_sum$se_gamma_sq=data_sum$sd_gamma_sq/sqrt(data_sum$count_gamma_sq)
+data_sum$se_se_sq=data_sum$sd_se_sq/sqrt(data_sum$count_se_sq)
+data_sum$se_z_sq=data_sum$sd_z_sq/sqrt(data_sum$count_z_sq)
+
+data_enrich <- d_z_matrix^2 - 1
+data_enrich$hgnc_id <- (d_z_scores %>% dplyr::select(hgnc_id))
+data_enrich <- left_join(data_enrich, d_s_het %>% dplyr::select(hgnc_id,exp_lof,post_mean,s_het_cat))
+data_enrich <- data_enrich[!is.na(data_enrich$post_mean),]
+traits <- colnames(data_enrich)[grepl('_irnt', colnames(data_enrich))]
+data_enrich <- data_enrich %>% mutate_at(traits, function(x) x / mean(x))
+data_enrich_var <- data_enrich %>% group_by(s_het_cat) %>% summarize_if(function(x) is.numeric(x) , var)
+data_enrich <- data_enrich %>% group_by(s_het_cat) %>% summarize_if(function(x) is.numeric(x) , mean)
+data_enrich$avg_h2_enrich <- rowMeans(data_enrich[traits] / data_enrich_var[traits]) / rowMeans(1/data_enrich_var[traits])
+data_enrich$avg_h2_enrich <- data_enrich$avg_h2_enrich / mean(data_enrich$avg_h2_enrich)
+
+#########
+span_temp=0.8
+
+line_alpha=0.8
+point_alpha=0.2
+
+#########
+color_temp="purple"
+p0 <- ggplot(data_enrich, aes(x=post_mean, y=avg_h2_enrich)) +
+  geom_point(size=2,alpha=point_alpha,color=color_temp) + 
+  geom_smooth(method = "loess", span=span_temp,se = F, color = alpha(color_temp, line_alpha)) +
+  xlab(substitute(paste("Mean s"[het], " in bin"))) +
+  ylab(expression("Heritability enrichment")) +
+  scale_x_continuous(trans='log', breaks=c(1e-4, 1e-3, 1e-2, 1e-1, 1)) +
+  theme_cowplot(9)
+
+outfile=paste0("paper_figures/figS33c.pdf")
+save_plot(outfile, p0,base_width = 2.5, base_height = 2)
+
+#
+color_temp="#4169E1"
+p1 <- ggplot(data_sum, aes(x=mean_s, y=mean_gamma_sq)) +
+  geom_point(size=2,alpha=point_alpha,color=color_temp) + 
+  geom_smooth(method = "loess", span=span_temp,se = F, color = alpha(color_temp, line_alpha)) +
+  scale_x_log10(breaks = trans_breaks("log10", function(x) 10^x),labels = trans_format("log10", math_format(10^.x))) +
+  xlab(substitute(paste("Mean s"[het], " in bin"))) +
+  ylab(expression(paste("Mean(" * gamma^2 * ")" ~ "across traits"))) +
+  theme_cowplot(9)
+
+outfile=paste0("paper_figures/figS33b.pdf")
+save_plot(outfile, p1,base_width = 2.5, base_height = 2)
+
+#
+
+color_temp="#DC143C"
+p2 <- ggplot(data_sum, aes(x=mean_s, y=mean_se_sq)) +
+  geom_point(size=2,alpha=point_alpha,color=color_temp) + 
+  geom_smooth(method = "loess", span=span_temp,se = F, color = alpha(color_temp, line_alpha)) +
+  scale_x_log10(breaks = trans_breaks("log10", function(x) 10^x),labels = trans_format("log10", math_format(10^.x))) +
+  xlab(substitute(paste("Mean s"[het], " in bin"))) +
+  ylab(expression(paste("Mean SE(" * hat(gamma) * ")"^2 ~ "across traits"))) +
+  theme_cowplot(9)
+
+outfile=paste0("paper_figures/figS33a.pdf")
+save_plot(outfile, p2,base_width = 2.5, base_height = 2)
+#
+
+color_range <- c(-3.4,0)
+color_breaks <- c(-3, -2, -1, 0)
+color_labels <- expression(10^-3,10^-2,10^-1,10^0)
+
+color_scheme <- scales::col_numeric(
+  palette = rev(c("black", "red", "orange", "yellow")),
+  domain = color_range
+)
+
+color_temp="#333333"
+
+
+p3 <- ggplot(data_sum, aes(x=mean_gamma_sq, y=mean_z_sq,colour = log10(mean_s))) +
+  geom_point(size=2,alpha=0.8) + 
+  geom_smooth(method = "loess", span=span_temp,se = T, color = alpha(color_temp, line_alpha)) +
+  xlab(expression(paste("Mean(" * gamma^2 * ")" ~ "across traits"))) +
+  ylab(expression("Mean(" * z^2 * ")" ~ "across traits")) +
+  scale_color_gradient(name = substitute(paste("Mean s"[het])), limits = color_range, breaks = color_breaks, labels = color_labels,
+                       low = color_scheme(-3.4), high = color_scheme(0),
+                       guide = guide_colorbar(label.theme = element_text(hjust = 0,size=9)))+  
+  scale_x_continuous()+
+  theme_cowplot(9)
+
+outfile=paste0("paper_figures/figS33d.pdf")
+save_plot(outfile, p3, base_width = 3, base_height = 2)
 
 
 
 #########################
-### Figure S9 ###
+### Figure S34 ###
+#########################
+d_z_scores <- fread("data/zscores_by_trait_MAF1_hgncIDs.txt")
+d_s_het=fread("data/zeng_et_al_v3.tsv") %>% rename(hgnc_id=hgnc) %>% select(c('hgnc_id', 'post_mean'))
+
+d_z_scores = merge(d_z_scores, d_s_het, by='hgnc_id')
+
+# 30040_irnt  Erythroidcells
+# 30240_irnt  Erythroidcells
+# 30210_irnt  T-cells
+# 30120_irnt  T-cells
+# 50_irnt bone
+# 3148_irnt   bone
+# 30740_irnt  pancreas
+# 30620_irnt  liver
+# 30700_irnt  liver
+
+d_full <- data.frame(gene=character(), hgnc_id=character(), num_tissues=integer(), z=double(), expr_group=character(), p_val=double(), shet_group=character())
+percs <- c(0, 0, 0, 0)
+for(idx in 1:9){
+  t <- c('30040_irnt', '30240_irnt', '30210_irnt',
+         '30120_irnt', '50_irnt', '3148_irnt',
+         '30740_irnt', '30620_irnt', '30700_irnt')[idx]
+  cell_type <- c('Erythroidcells', 'Erythroidcells', 'T-cells',
+                 'T-cells', 'bone', 'bone',
+                 'pancreas', 'liver', 'liver')[idx]
+  d_conv <- fread('data/all_genes.hgnc_id.txt')
+  exp_name <- paste('data/', cell_type, '_TPM10Genes_expression_specificity.txt', sep='')
+  d_exp <- read.table(exp_name, col.names=c('gene', 'num_tissues'))
+  d_conv <- convert_name_to_hgnc(d_exp$gene, d_conv)
+  d_exp <- left_join(d_conv, d_exp, by='gene')
+  these_z_scores <- d_z_scores %>% select(all_of(c('hgnc_id', t, 'post_mean')))
+  colnames(these_z_scores)[2] = 'z'
+  this_full <- left_join(d_exp, these_z_scores, by='hgnc_id')
+  this_full$trait <- t
+  this_full <- drop_na(this_full, 'z')
+  this_full$num_tissues <- as.numeric(this_full$num_tissues)
+  this_full$expr_group <- cut(this_full$num_tissues, breaks = c(-1,0.041, 0.061, 0.088, 0.149, 2), labels = c("group1", "group2", "group3", "group4", "group5"))
+  this_full$shet_group <- cut(this_full$post_mean, breaks = c(-1,0.001, 0.01, 0.03, 0.1, 2), labels = rev(c(bquote('0.1 < s[het]'),
+                                                                                                            bquote('"0.03 < "*s[het] < 0.1'), 
+                                                                                                            bquote('"0.01 < "*s[het] < 0.03'),
+                                                                                                            bquote('"0.001 < "*s[het] < 0.01'),
+                                                                                                            bquote('s[het] < 0.001'))))
+  if(idx != 2 && idx != 4 && idx != 6 && idx != 9){
+    print(cell_type) 
+    print((this_full %>% group_by(expr_group) %>% summarize(proportion=n()/dim(this_full)[1]))$proportion)
+  }
+  this_full$p_val <- pchisq(this_full$z^2, 1, lower.tail=FALSE, log.p = TRUE)
+  d_full <- rbind(d_full, this_full)
+}
+
+
+p1 <- ggplot(d_full, aes(sample=-p_val/log(10), colour=expr_group)) +
+  stat_qq(distribution = function(p) qexp(p, rate=log(10)), alpha=0.5, size=2) + # stat_qq_line(distribution = function(p) qexp(p, rate=1)) +
+  xlab(expression(paste("Expected ", -log[10], " p"))) +
+  ylab(expression(paste("Observed ", -log[10], " p"))) +
+  geom_abline() + 
+  guides(color=guide_legend(reverse=TRUE)) +
+  # guides(colour="none") +
+  scale_y_continuous(trans = squish_trans(), breaks=c(0, 10, 20, 30, 60, 300)) +
+  scale_color_discrete(name='Expression\nspecificity bin', labels=c('Least specific', '', '', '', 'Most specific')) +
+  theme_cowplot(9) +
+  facet_grid(rows = vars(shet_group), labeller=label_parsed)
+
+outfile="paper_figures/figS34.pdf"
+save_plot(outfile, p1,base_width = 6.2, base_height = 10)
+
+
+
+
+
+
+#########################
+### Figure S35 ###
+#########################
+
+d_z_scores <- fread("data/zscores_by_trait_MAF1_missense_hgncIDs.txt")
+
+# 30040_irnt  Erythroidcells
+# 30240_irnt  Erythroidcells
+# 30210_irnt  T-cells
+# 30120_irnt  T-cells
+# 50_irnt bone
+# 3148_irnt   bone
+# 30740_irnt  pancreas
+# 30620_irnt  liver
+# 30700_irnt  liver
+
+d_full <- data.frame(gene=character(), hgnc_id=character(), num_tissues=integer(), z=double(), expr_group=character(), p_val=double())
+percs <- c(0, 0, 0, 0)
+plots <- list()
+for(idx in 1:9){
+  t <- c('30040_irnt', '30240_irnt', '30210_irnt',
+         '30120_irnt', '50_irnt', '3148_irnt',
+         '30740_irnt', '30620_irnt', '30700_irnt')[idx]
+  cell_type <- c('Erythroidcells', 'Erythroidcells', 'T-cells',
+                 'T-cells', 'bone', 'bone',
+                 'pancreas', 'liver', 'liver')[idx]
+  d_conv <- fread('data/all_genes.hgnc_id.txt')
+  exp_name <- paste('data/', cell_type, '_TPM10Genes_expression_specificity.txt', sep='')
+  d_exp <- read.table(exp_name, col.names=c('gene', 'num_tissues'))
+  d_conv <- convert_name_to_hgnc(d_exp$gene, d_conv)
+  d_exp <- left_join(d_conv, d_exp, by='gene')
+  these_z_scores <- d_z_scores %>% select(all_of(c('hgnc_id', t)))
+  colnames(these_z_scores)[2] = 'z'
+  this_full <- left_join(d_exp, these_z_scores, by='hgnc_id')
+  this_full$trait <- t
+  this_full <- drop_na(this_full, 'z')
+  this_full$num_tissues <- as.numeric(this_full$num_tissues)
+  this_full$expr_group <- cut(this_full$num_tissues, breaks = c(-1,0.041, 0.061, 0.088, 0.149, 2), labels = c("group1", "group2", "group3", "group4", "group5"))
+  if(idx != 2 && idx != 4 && idx != 6 && idx != 9){
+    print(cell_type) 
+    print((this_full %>% group_by(expr_group) %>% summarize(proportion=n()/dim(this_full)[1]))$proportion)
+  }
+  this_full$p_val <- pchisq(this_full$z^2, 1, lower.tail=FALSE, log.p = TRUE)
+  plots[[idx]] <- ggplot(this_full, aes(sample=-p_val/log(10), colour=expr_group)) +
+    stat_qq(distribution = function(p) qexp(p, rate=log(10)), alpha=1, size=2) + # stat_qq_line(distribution = function(p) qexp(p, rate=1)) +
+    xlab(expression(paste("Expected ", -log[10], " p"))) +
+    ylab(expression(paste("Observed ", -log[10], " p"))) +
+    ggtitle(paste(t, cell_type)) +
+    geom_abline() +
+    guides(colour="none") +
+    scale_y_continuous(trans = squish_trans(), breaks=c(0, 10, 20, 30, 60, 300)) +
+    theme_cowplot(9)
+  d_full <- rbind(d_full, this_full)
+}
+
+p1 <- ggplot(d_full, aes(sample=-p_val/log(10), colour=expr_group)) +
+  stat_qq(distribution = function(p) qexp(p, rate=log(10)), alpha=0.5, size=2) + # stat_qq_line(distribution = function(p) qexp(p, rate=1)) +
+  xlab(expression(paste("Expected ", -log[10], " p"))) +
+  ylab(expression(paste("Observed ", -log[10], " p"))) +
+  geom_abline() + 
+  guides(color=guide_legend(reverse=TRUE)) +
+  # guides(colour="none") +
+  scale_y_continuous(trans = squish_trans(), breaks=c(0, 10, 20, 30, 60, 300)) +
+  scale_color_discrete(name='Expression\nspecificity bin', labels=c('Least specific', '', '', '', 'Most specific')) +
+  theme_cowplot(9)
+
+outfile="paper_figures/figS35.pdf"
+save_plot(outfile, p1,base_width = 4.2, base_height = 2)
+
+
+
+
+
+#########################
+### Figure S36 ###
 #########################
 
 
@@ -1236,7 +3037,6 @@ d_map=data.frame(tissue=tissues,tissue_name=tissue_names)
 d_data=left_join(d_data,d_map)
 
 traits=sort(unique(d_data$trait))
-#trait_names=c("Mean corpuscular volume","Lymphocyte count","Eosinophil count","Reticulocyte percentage", "Alanine aminotransferase", "Creatinine", "Glucose", "Heel bone mineral density", "Height")
 trait_names=c("MCV","Lymphocyte count","Eosinophil count","Reticulocyte percentage", "ALT", "Creatinine", "Glucose", "Heel BMD", "Height")
 d_map=data.frame(trait=traits,trait_name=trait_names)
 d_data=left_join(d_data,d_map)
@@ -1302,7 +3102,7 @@ p0 <- ggplot() +
   theme_cowplot(9)+
   guides(color = "none")
 
-outfile="paper_figures/figS9b.pdf"
+outfile="paper_figures/figS36b.pdf"
 save_plot(outfile, p0,base_width = 3.5, base_height = 3)
 
 ####
@@ -1316,7 +3116,6 @@ d_map=data.frame(tissue=tissues,tissue_name=tissue_names)
 d_data=left_join(d_data,d_map)
 
 traits=sort(unique(d_data$trait))
-#trait_names=c("Mean corpuscular volume","Lymphocyte count","Eosinophil count","Reticulocyte percentage", "Alanine aminotransferase", "Creatinine", "Glucose", "Heel bone mineral density", "Height")
 trait_names=c("MCV","Lymphocyte count","Eosinophil count","Reticulocyte percentage", "ALT", "Creatinine", "Glucose", "Heel BMD", "Height")
 d_map=data.frame(trait=traits,trait_name=trait_names)
 d_data=left_join(d_data,d_map)
@@ -1384,7 +3183,7 @@ p0 <- ggplot() +
 
 
 
-outfile="paper_figures/figS9a.pdf"
+outfile="paper_figures/figS36a.pdf"
 save_plot(outfile, p0,base_width = 3.5, base_height = 3)
 
 
@@ -1415,12 +3214,12 @@ p1 <- ggplot(psi_curve_df, aes(x=psi_g, y=context_factor, group=psi_v)) +
   geom_line(aes(color=psi_v)) +
   scale_color_viridis(direction = -1) +
   xlab(expression(Psi["G"] ~ ", trait specificity of the gene")) +
-  ylab("Trait specificity of variant relative to gene") +
+  ylab(expression(paste("Trait specificity of variant relative to gene, ", Psi["V"]/Psi["G"]))) +
   geom_line(data=data.frame(coding_df), aes(x=x, y=y), linetype=2, linewidth=1) +
   guides(color = "none")
 
 outfile="paper_figures/fig4a.pdf"
-save_plot(outfile, p1, base_width = 3, base_height = 3)
+save_plot(outfile, p1, base_width = 3, base_height = 3.2)
 
 
 
@@ -1436,7 +3235,9 @@ save_plot(outfile, p1, base_width = 3, base_height = 3)
 ### Figure 4B and S10 ###
 #########################
 
-d_ldsc = fread('data/all_traits_spcificityBIN_tau_jeff_bins.txt')
+d_ldsc = fread('data/missense_summary_250520_real_tau.txt')
+d_ldsc = d_ldsc %>% rename(tau='tau_adjusted', tau_se='tau_adjusted_se')
+d_ldsc = d_ldsc %>% rename_with(tolower)
 
 d_ldsc <- separate(d_ldsc, annot, into = c("tissue", "covar", "group"), sep = "_")
 d_data=d_ldsc[d_ldsc$covar=="specificity",]
@@ -1447,7 +3248,8 @@ d_map=data.frame(tissue=tissues,tissue_name=tissue_names)
 d_data=left_join(d_data,d_map)
 
 traits=sort(unique(d_data$trait))
-trait_names=c("MCV","Lymphocyte count","Eosinophil count","Reticulocyte percentage", "ALT", "Creatinine", "Glucose", "Heel BMD", "Height")
+#trait_names=c("Mean corpuscular volume","Lymphocyte count","Eosinophil count","Reticulocyte percentage", "Alanine aminotransferase", "Creatinine", "Glucose", "Heel bone mineral density", "Height")
+trait_names=c("ALT", "Creatinine", "Eosinophil count", "Glucose", "Heel BMD", "Height", "Lymphocyte count", "MCV", "Reticulocyte percentage")
 d_map=data.frame(trait=traits,trait_name=trait_names)
 d_data=left_join(d_data,d_map)
 
@@ -1485,20 +3287,24 @@ custom_palette <- c(custom_palette, "black")
 ###
 
 
-b_point = 2.5
+b_point = 2e-5
 squish_power = 0.1
 squish_const = 0.1
+# squish_power = 1.0
+# squish_const = 0.0
 squish_trans <- function() {
   trans_new(
     name = "squish",
+    # transform = function(x) ifelse(x <= b_point, x, b_point + (x - b_point) / 10),
+    # inverse = function(x) ifelse(x <= b_point, x, b_point + (x - b_point) * 10)
     transform = function(x) sign(x)*((abs(x/b_point)+squish_const)^(squish_power)*squish_const^(squish_power-1)/squish_power - squish_const^(2*squish_power-1)/squish_power),
     inverse = function(x) sign(x)*b_point*(((squish_power*abs(x)+squish_const^(2*squish_power-1))/squish_const^(squish_power-1))^(1/squish_power) - squish_const)
   )
 }
 
 
-breaks <- c(-2, -1, 0, 1, 2, 3, 4)
-labels <- c(-2, -1, 0, 1, 2, 3, 4)
+breaks <- c(-2e-5, -1e-5, -3e-6, 0, 3e-6, 1e-5, 2e-5, 4e-5, 8e-5)
+# labels <- c(-2, -1, -0.3, 0, 0.3, 1, 2, 4, 8)
 
 ###
 
@@ -1509,19 +3315,23 @@ p0 <- ggplot() +
   geom_line(data=d_sum,aes(x=group, y=tau,group = 1),linewidth=1) +
   geom_hline(yintercept = 0, linetype = "dashed", color = "black",linewidth=0.5) +
   xlab("Expression specificity bin") +
-  ylab(expression("LDSC" ~ tau ~ ", coding variants")) +
+  ylab(expression("LDSC" ~ tau / h^2 * ", coding variants")) +
   scale_x_discrete(labels = c("Bin 1", "Bin 2", "Bin 3", "Bin 4", "Bin 5")) +
   labs(color = "Trait-Tissue pair") +
   scale_color_manual(name = "Trait-Tissue pair", values = custom_palette) +
   theme_cowplot(9) +
   guides(color = "none") +
-  scale_y_continuous(trans = squish_trans(), breaks = breaks, labels = labels)
+  scale_y_continuous(trans = squish_trans(), breaks = breaks, labels = fancy_scientific)
+# geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = 1.9, ymax = 2.1), fill = "white", color = NA)
 
 
 outfile="paper_figures/fig4b.pdf"
-save_plot(outfile, p0,base_width = 2.3, base_height = 2.1)
+save_plot(outfile, p0,base_width = 2.6, base_height = 2.1)
 
-d_ldsc = fread('data/all_traits_intensityBIN_tau_jeff_bins.txt')
+
+d_ldsc = fread('data/missense_summary_250520_real_tau.txt')
+d_ldsc = d_ldsc %>% rename(tau='tau_adjusted', tau_se='tau_adjusted_se')
+d_ldsc = d_ldsc %>% rename_with(tolower)
 
 d_ldsc <- separate(d_ldsc, annot, into = c("tissue", "covar", "group"), sep = "_")
 d_data=d_ldsc[d_ldsc$covar=="TPM",]
@@ -1532,7 +3342,8 @@ d_map=data.frame(tissue=tissues,tissue_name=tissue_names)
 d_data=left_join(d_data,d_map)
 
 traits=sort(unique(d_data$trait))
-trait_names=c("MCV","Lymphocyte count","Eosinophil count","Reticulocyte percentage", "ALT", "Creatinine", "Glucose", "Heel BMD", "Height")
+#trait_names=c("Mean corpuscular volume","Lymphocyte count","Eosinophil count","Reticulocyte percentage", "Alanine aminotransferase", "Creatinine", "Glucose", "Heel bone mineral density", "Height")
+trait_names=c("ALT", "Creatinine", "Eosinophil count", "Glucose", "Heel BMD", "Height", "Lymphocyte count", "MCV", "Reticulocyte percentage")
 d_map=data.frame(trait=traits,trait_name=trait_names)
 d_data=left_join(d_data,d_map)
 
@@ -1561,6 +3372,10 @@ d_sum$group=factor(d_sum$group, levels = rev(c("GROUP1", "GROUP2", "GROUP3", "GR
 d_all=rbind(d_sum,d_data %>% select(colnames(d_sum)))
 d_all$trait_cell <- factor(d_all$trait_cell,levels = c(sort(unique(d_data$trait_cell)),"Average")  )
 
+
+
+
+
 p0 <- ggplot() +
   geom_line(data=d_all,aes(x=group, y=tau,group=trait_cell,color=trait_cell),linewidth=0.5) +
   geom_point(data=d_sum,aes(x=group, y=tau),size=2.2) +
@@ -1568,16 +3383,16 @@ p0 <- ggplot() +
   geom_line(data=d_sum,aes(x=group, y=tau,group = 1),linewidth=1) +
   geom_hline(yintercept = 0, linetype = "dashed", color = "black",linewidth=0.5) +
   xlab("Expression level bin") +
-  ylab(expression("LDSC" ~ tau ~ ", coding variants")) +
+  ylab(expression("LDSC" ~ tau / h^2 * ", coding variants")) +
   scale_x_discrete(labels = c("Bin 2", "Bin 3", "Bin 4", "Bin 5")) +
   labs(color = "Trait-Tissue pair") +
   scale_color_manual(name = "Trait-Tissue pair", values = custom_palette) +
   theme_cowplot(9) +
   guides(color = "none") +
-  scale_y_continuous(trans = squish_trans(), breaks = breaks, labels = labels)
+  scale_y_continuous(trans = squish_trans(), breaks = breaks, labels = fancy_scientific)
 
 
-outfile="paper_figures/figS10.pdf"
+outfile="paper_figures/figS37.pdf"
 save_plot(outfile, p0,base_width = 3.5, base_height = 3)
 
 
@@ -1587,7 +3402,138 @@ save_plot(outfile, p0,base_width = 3.5, base_height = 3)
 
 
 
+#########################
+### Figure S38 ###
+#########################
 
+
+d_ldsc = fread('data/partitioning_results_summary_missense_250218.txt')
+colnames(d_ldsc) <- tolower(colnames(d_ldsc))
+d_ldsc <- separate(d_ldsc, annot, into = c("tissue", "covar", "group"), sep = "_")
+d_data=d_ldsc[d_ldsc$covar=="specificity",]
+
+tissues=sort(unique(d_data$tissue))
+tissue_names=c("Bone","Erythroid","Liver","Pancreas","Tcell")
+d_map=data.frame(tissue=tissues,tissue_name=tissue_names)
+d_data=left_join(d_data,d_map)
+
+traits=sort(unique(d_data$trait))
+trait_names=c("ALT", "Creatinine", "Eosinophil count", "Glucose", "Heel BMD", "Height", "Lymphocyte count", "MCV", "Reticulocyte percentage")
+d_map=data.frame(trait=traits,trait_name=trait_names)
+d_data=left_join(d_data,d_map)
+
+d_data$trait_cell=paste0(d_data$trait_name,"-",d_data$tissue_name)
+
+###meta-analysis
+
+d_data$weight <- 1 / (d_data$enrichment_std_error)^2
+
+iter=0
+for (group_temp in c("GROUP1", "GROUP2", "GROUP3", "GROUP4", "GROUP5")){
+  iter=iter+1
+  d_temp=d_data[d_data$group==group_temp,]
+  weighted_mean <- sum(d_temp$weight * d_temp$enrichment) / sum(d_temp$weight)
+  weighted_se <- sqrt(1 / sum(d_temp$weight))
+  d_sum_temp=data.frame(group= group_temp,enrichment=weighted_mean,enrichment_std_error=weighted_se,trait_cell="Average")
+  if (iter==1){d_sum=d_sum_temp}
+  if (iter>1){d_sum=rbind(d_sum,d_sum_temp)}
+}
+
+########
+
+d_data$group=factor(d_data$group, levels = c("GROUP1", "GROUP2", "GROUP3", "GROUP4", "GROUP5"))
+d_sum$group=factor(d_sum$group, levels = c("GROUP1", "GROUP2", "GROUP3", "GROUP4", "GROUP5"))
+
+d_all=rbind(d_sum,d_data %>% select(colnames(d_sum)))
+d_all$trait_cell <- factor(d_all$trait_cell,levels = c(sort(unique(d_data$trait_cell)),"Average")  )
+
+########
+
+num_levels <- length(levels(d_all$trait_cell))
+custom_palette <- brewer.pal(num_levels - 1, "Set3")
+custom_palette <- c(custom_palette, "black")
+
+###
+
+p0 <- ggplot() +
+  geom_line(data=d_all,aes(x=group, y=enrichment,group=trait_cell,color=trait_cell),linewidth=0.5) +
+  geom_point(data=d_sum,aes(x=group, y=enrichment),size=2.2) +
+  geom_errorbar(data=d_sum,aes(x=group, y=enrichment,ymin=enrichment-2*enrichment_std_error, ymax=enrichment+2*enrichment_std_error), width=0, position=position_dodge(0.0))+
+  geom_line(data=d_sum,aes(x=group, y=enrichment,group = 1),linewidth=1) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "black",linewidth=0.5) +
+  xlab("Expression specificity bin") +
+  ylab(expression("LDSC" ~ h^2 ~ " enrichment, coding")) +
+  scale_x_discrete(labels = c("Bin 1", "Bin 2", "Bin 3", "Bin 4", "Bin 5")) +
+  labs(color = "Trait-Tissue pair") +
+  scale_color_manual(name = "Trait-Tissue pair", values = custom_palette) +
+  theme_cowplot(9) +
+  guides(color = "none")
+
+outfile="paper_figures/figS38a.pdf"
+save_plot(outfile, p0,base_width = 3.5 , base_height = 3)
+
+d_ldsc = fread('data/partitioning_results_summary_missense_250218.txt')
+colnames(d_ldsc) <- tolower(colnames(d_ldsc))
+
+d_ldsc <- separate(d_ldsc, annot, into = c("tissue", "covar", "group"), sep = "_")
+d_data=d_ldsc[d_ldsc$covar=="TPM",]
+
+tissues=sort(unique(d_data$tissue))
+tissue_names=c("Bone","Erythroid","Liver","Pancreas","Tcell")
+d_map=data.frame(tissue=tissues,tissue_name=tissue_names)
+d_data=left_join(d_data,d_map)
+
+traits=sort(unique(d_data$trait))
+#trait_names=c("Mean corpuscular volume","Lymphocyte count","Eosinophil count","Reticulocyte percentage", "Alanine aminotransferase", "Creatinine", "Glucose", "Heel bone mineral density", "Height")
+trait_names=c("ALT", "Creatinine", "Eosinophil count", "Glucose", "Heel BMD", "Height", "Lymphocyte count", "MCV", "Reticulocyte percentage")
+d_map=data.frame(trait=traits,trait_name=trait_names)
+d_data=left_join(d_data,d_map)
+
+d_data$trait_cell=paste0(d_data$trait_name,"-",d_data$tissue_name)
+
+###meta-analysis
+
+d_data$weight <- 1 / (d_data$enrichment_std_error)^2
+
+iter=0
+for (group_temp in c("GROUP1", "GROUP2", "GROUP3", "GROUP4")){
+  iter=iter+1
+  d_temp=d_data[d_data$group==group_temp,]
+  weighted_mean <- sum(d_temp$weight * d_temp$enrichment) / sum(d_temp$weight)
+  weighted_se <- sqrt(1 / sum(d_temp$weight))
+  d_sum_temp=data.frame(group= group_temp,enrichment=weighted_mean,enrichment_std_error=weighted_se,trait_cell="Average")
+  if (iter==1){d_sum=d_sum_temp}
+  if (iter>1){d_sum=rbind(d_sum,d_sum_temp)}
+}
+
+########
+
+d_data$group=factor(d_data$group, levels = rev(c("GROUP1", "GROUP2", "GROUP3", "GROUP4")))
+d_sum$group=factor(d_sum$group, levels = rev(c("GROUP1", "GROUP2", "GROUP3", "GROUP4")))
+
+d_all=rbind(d_sum,d_data %>% select(colnames(d_sum)))
+d_all$trait_cell <- factor(d_all$trait_cell,levels = c(sort(unique(d_data$trait_cell)),"Average")  )
+
+
+p0 <- ggplot() +
+  geom_line(data=d_all,aes(x=group, y=enrichment,group=trait_cell,color=trait_cell),linewidth=0.5) +
+  geom_point(data=d_sum,aes(x=group, y=enrichment),size=2.2) +
+  geom_errorbar(data=d_sum,aes(x=group, y=enrichment,ymin=enrichment-2*enrichment_std_error, ymax=enrichment+2*enrichment_std_error), width=0, position=position_dodge(0.0))+
+  geom_line(data=d_sum,aes(x=group, y=enrichment,group = 1),linewidth=1) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "black",linewidth=0.5) +
+  xlab("Expression level bin") +
+  ylab(expression("LDSC" ~ h^2 ~ " enrichment, coding")) +
+  scale_x_discrete(labels = c("Bin 2", "Bin 3", "Bin 4", "Bin 5")) +
+  labs(color = "Trait-Tissue pair") +
+  scale_color_manual(name = "Trait-Tissue pair", values = custom_palette) +
+  theme_cowplot(9) +
+  guides(color = "none")
+# scale_y_continuous(trans = squish_trans(), breaks = breaks, labels = labels)
+# geom_rect(aes(xmin = -Inf, xmax = Inf, ymin = 1.9, ymax = 2.1), fill = "white", color = NA)
+
+
+outfile="paper_figures/figS38b.pdf"
+save_plot(outfile, p0,base_width = 3.5, base_height = 3)
 
 
 
@@ -1600,17 +3546,18 @@ save_plot(outfile, p0,base_width = 3.5, base_height = 3)
 ### Figure 4C and S11 ###
 #########################
 
+d_ldsc=fread("data/ATAC_summary_250520_real_tau.txt")
+d_ldsc = d_ldsc %>% rename(tau='tau_adjusted', tau_se='tau_adjusted_se')
+d_ldsc = d_ldsc %>% rename_with(tolower)
 
-d_ldsc=fread("data/ATAC_specificity_LDSC_Mineto.txt")
-
-d_ldsc <- separate(d_ldsc, annot, into = c("tissue", "x", "group"), sep = "_")
-d_ldsc <- separate(d_ldsc, x, into = c("covar", "y"), sep = "-") %>% select(-y)
+d_ldsc <- separate(d_ldsc, annot, into = c("tissue", "covar", "group"), sep = "_")
+# d_ldsc <- separate(d_ldsc, x, into = c("covar", "y"), sep = "-") %>% select(-y)
 
 d_data=d_ldsc[d_ldsc$covar=="specificity",]
 
 tissues=sort(unique(d_data$tissue))
 traits=sort(unique(d_data$trait))
-trait_names=c("MCV","Lymphocyte count","Eosinophil count","Reticulocyte %", "ALT", "Creatinine", "Glucose", "Heel BMD", "Height")
+trait_names=c("ALT", "Creatinine", "Eosinophil count", "Glucose", "Heel BMD", "Height", "Lymphocyte count", "MCV", "Reticulocyte percentage")
 d_map=data.frame(trait=traits,trait_name=trait_names)
 
 d_data=left_join(d_data,d_map)
@@ -1641,57 +3588,56 @@ d_all$trait_cell <- factor(d_all$trait_cell,levels = c(sort(unique(d_data$trait_
 
 ########
 
-b_point = 0.65
+b_point = 2e-5
 squish_power = 0.1
-squish_const = 0.2
+squish_const = 0.1
 squish_trans <- function() {
   trans_new(
     name = "squish",
-    transform = function(x) sign(x)*((abs(x)+squish_const)^(squish_power)*squish_const^(squish_power-1)/squish_power - squish_const^(2*squish_power-1)/squish_power),
-    inverse = function(x) sign(x)*(((squish_power*abs(x)+squish_const^(2*squish_power-1))/squish_const^(squish_power-1))^(1/squish_power) - squish_const)
+    transform = function(x) sign(x)*((abs(x/b_point)+squish_const)^(squish_power)*squish_const^(squish_power-1)/squish_power - squish_const^(2*squish_power-1)/squish_power),
+    inverse = function(x) sign(x)*b_point*(((squish_power*abs(x)+squish_const^(2*squish_power-1))/squish_const^(squish_power-1))^(1/squish_power) - squish_const)
   )
 }
+
+
+breaks <- c(-4e-6, -2e-6,  0, 2e-6, 4e-6, 6e-6)
+# labels <- c(-4e-6, -2e-6,  0, 2e-6, 4e-6, 6e-6)
+
 
 num_levels <- length(levels(d_all$trait_cell))
 custom_palette <- brewer.pal(num_levels - 1, "Set3")
 custom_palette <- c(custom_palette, "black")
 
-
-breaks <- c(-4, -3, -2, -1, 0, 1, 2)
-labels <- c(-4, -3, -2, -1, 0, 1, 2)
-
-###
-
-p0 <- ggplot() +
-  geom_line(data=d_all,aes(x=group, y=tau,group=trait_cell,color=trait_cell),linewidth=0.5) +
-  geom_point(data=d_sum,aes(x=group, y=tau),size=2.2) +
+p1 <- ggplot() +
+  geom_line(data=d_all,aes(x=group, y=tau,group=trait_cell,color=trait_cell),linewidth=1) +
+  geom_point(data=d_sum,aes(x=group, y=tau),size=2) +
   geom_errorbar(data=d_sum,aes(x=group, y=tau,ymin=tau-2*tau_se, ymax=tau+2*tau_se), width=0, position=position_dodge(0.0))+
-  geom_line(data=d_sum,aes(x=group, y=tau,group = 1),linewidth=1) +
+  geom_line(data=d_sum,aes(x=group, y=tau,group = 1),linewidth=2) +
   geom_hline(yintercept = 0, linetype = "dashed", color = "black",linewidth=0.5) +
   xlab("Number of shared tissues") +
-  ylab(expression("LDSC" ~ tau ~ ", non-coding variants")) +
+  ylab(expression("LDSC" ~ tau/h^2 * ", non-coding variants")) +
   scale_x_discrete(labels = c("19", "16-18", "9-15","3-8","1-2")) +
-  scale_y_continuous(trans = squish_trans(), breaks = breaks) +
+  scale_y_continuous(trans = squish_trans(), breaks = breaks, labels=fancy_scientific) +
   labs(color = "Trait-Tissue pair") +
   scale_color_manual(name = "Trait-Tissue pair", values = custom_palette) +
-  theme_cowplot(9) + 
-  guides(color = "none")
+  theme_cowplot(9)
 
 
 outfile="paper_figures/fig4c.pdf"
-save_plot(outfile, p0,base_width = 2.3, base_height = 2.1)
+save_plot(outfile, p1,base_width = 6, base_height = 2)
+
+d_ldsc=fread("data/ATAC_summary_250520_real_tau.txt")
+d_ldsc = d_ldsc %>% rename(tau='tau_adjusted', tau_se='tau_adjusted_se')
+d_ldsc = d_ldsc %>% rename_with(tolower)
 
 
-d_ldsc=fread("data/ATAC_specificity_LDSC_Mineto.txt")
-
-d_ldsc <- separate(d_ldsc, annot, into = c("tissue", "x", "group"), sep = "_")
-d_ldsc <- separate(d_ldsc, x, into = c("covar", "y"), sep = "-") %>% select(-y)
+d_ldsc <- separate(d_ldsc, annot, into = c("tissue", "covar", "group"), sep = "_")
 
 d_data=d_ldsc[d_ldsc$covar=="intensity",]
 
 tissues=sort(unique(d_data$tissue))
 traits=sort(unique(d_data$trait))
-trait_names=c("MCV","Lymphocyte count","Eosinophil count","Reticulocyte %", "ALT", "Creatinine", "Glucose", "Heel BMD", "Height")
+trait_names=c("ALT", "Creatinine", "Eosinophil count", "Glucose", "Heel BMD", "Height", "Lymphocyte count", "MCV", "Reticulocyte percentage")
 d_map=data.frame(trait=traits,trait_name=trait_names)
 
 d_data=left_join(d_data,d_map)
@@ -1722,24 +3668,24 @@ d_all$trait_cell <- factor(d_all$trait_cell,levels = c(sort(unique(d_data$trait_
 
 ########
 
-b_point = 0.65
+b_point = 2e-5
 squish_power = 0.1
-squish_const = 0.2
+squish_const = 0.1
 squish_trans <- function() {
   trans_new(
     name = "squish",
-    transform = function(x) sign(x)*((abs(x)+squish_const)^(squish_power)*squish_const^(squish_power-1)/squish_power - squish_const^(2*squish_power-1)/squish_power),
-    inverse = function(x) sign(x)*(((squish_power*abs(x)+squish_const^(2*squish_power-1))/squish_const^(squish_power-1))^(1/squish_power) - squish_const)
+    transform = function(x) sign(x)*((abs(x/b_point)+squish_const)^(squish_power)*squish_const^(squish_power-1)/squish_power - squish_const^(2*squish_power-1)/squish_power),
+    inverse = function(x) sign(x)*b_point*(((squish_power*abs(x)+squish_const^(2*squish_power-1))/squish_const^(squish_power-1))^(1/squish_power) - squish_const)
   )
 }
+
+
+breaks <- c(-4e-6, -2e-6,  0, 2e-6, 4e-6, 6e-6)
+labels <- c(-4e-6, -2e-6,  0, 2e-6, 4e-6, 6e-6)
 
 num_levels <- length(levels(d_all$trait_cell))
 custom_palette <- brewer.pal(num_levels - 1, "Set3")
 custom_palette <- c(custom_palette, "black")
-
-
-breaks <- c(-4, -3, -2, -1, 0, 1, 2)
-labels <- c(-4, -3, -2, -1, 0, 1, 2)
 
 ###
 
@@ -1750,20 +3696,342 @@ p0 <- ggplot() +
   geom_line(data=d_sum,aes(x=group, y=tau,group = 1),linewidth=1) +
   geom_hline(yintercept = 0, linetype = "dashed", color = "black",linewidth=0.5) +
   xlab("ATAC-seq peak intensity bin") +
-  ylab(expression("LDSC" ~ tau ~ ", non-coding variants")) +
+  ylab(expression("LDSC" ~ tau/h^2 * ", non-coding variants")) +
   scale_x_discrete(labels = c("Bin 2", "Bin 3", "Bin 4","Bin 5")) +
-  scale_y_continuous(trans = squish_trans(), breaks = breaks) +
+  scale_y_continuous(trans = squish_trans(), breaks = breaks, labels=fancy_scientific) +
   labs(color = "Trait-Tissue pair") +
   scale_color_manual(name = "Trait-Tissue pair", values = custom_palette) +
   theme_cowplot(9) + 
   guides(color = "none")
 
 
-outfile="paper_figures/figS11.pdf"
+outfile="paper_figures/figS39.pdf"
 save_plot(outfile, p0,base_width = 3.5, base_height = 3)
 
 
 
+
+#########################
+### Figure S40-43 ###
+#########################
+
+d_ldsc=fread("data/partitioning_results_summary_250218.txt")
+colnames(d_ldsc) <- tolower(colnames(d_ldsc))
+d_ldsc <- separate(d_ldsc, annot, into = c("tissue", "covar", "group"), sep = "_")
+
+d_data=d_ldsc[d_ldsc$covar=="specificity",]
+
+tissues=sort(unique(d_data$tissue))
+traits=sort(unique(d_data$trait))
+#trait_names=c("Mean corpuscular volume","Lymphocyte count","Eosinophil count","Reticulocyte percentage", "Alanine aminotransferase", "Creatinine", "Glucose", "Heel bone mineral density", "Height")
+trait_names=c("ALT", "Creatinine", "Eosinophil count", "Glucose", "Heel BMD", "Height", "Lymphocyte count", "MCV", "Reticulocyte percentage")
+d_map=data.frame(trait=traits,trait_name=trait_names)
+
+d_data=left_join(d_data,d_map)
+d_data$trait_cell=paste0(d_data$trait_name,"-",d_data$tissue)
+
+###meta-analysis
+
+d_data$weight <- 1 / (d_data$enrichment_std_error)^2
+
+iter=0
+for (group_temp in c("GROUP1", "GROUP2", "GROUP3", "GROUP4", "GROUP5")){
+  iter=iter+1
+  d_temp=d_data[d_data$group==group_temp,]
+  weighted_mean <- sum(d_temp$weight * d_temp$enrichment) / sum(d_temp$weight)
+  weighted_se <- sqrt(1 / sum(d_temp$weight))
+  d_sum_temp=data.frame(group= group_temp,enrichment=weighted_mean,enrichment_std_error=weighted_se,trait_cell="Average")
+  if (iter==1){d_sum=d_sum_temp}
+  if (iter>1){d_sum=rbind(d_sum,d_sum_temp)}
+}
+
+########
+
+d_data$group=factor(d_data$group, levels = rev(c("GROUP1", "GROUP2", "GROUP3", "GROUP4", "GROUP5")))
+d_sum$group=factor(d_sum$group, levels = rev(c("GROUP1", "GROUP2", "GROUP3", "GROUP4", "GROUP5")))
+
+d_all=rbind(d_sum,d_data %>% select(colnames(d_sum)))
+d_all$trait_cell <- factor(d_all$trait_cell,levels = c(sort(unique(d_data$trait_cell)),"Average")  )
+
+########
+
+
+num_levels <- length(levels(d_all$trait_cell))
+custom_palette <- brewer.pal(num_levels - 1, "Set3")
+custom_palette <- c(custom_palette, "black")
+
+p1 <- ggplot() +
+  geom_line(data=d_all,aes(x=group, y=enrichment,group=trait_cell,color=trait_cell),linewidth=0.5) +
+  geom_line(data=d_sum,aes(x=group, y=enrichment,group = 1),linewidth=1) +
+  geom_point(data=d_sum,aes(x=group, y=enrichment),size=2) +
+  geom_errorbar(data=d_sum,aes(x=group, y=enrichment,ymin=enrichment-2*enrichment_std_error, ymax=enrichment+2*enrichment_std_error), width=0, position=position_dodge(0.0))+
+  geom_hline(yintercept = 1, linetype = "dashed", color = "black",linewidth=0.5) +
+  xlab("Number of shared tissues") +
+  ylab(expression("LDSC" ~ h^2 ~ " enrichment, non-coding variants")) +
+  scale_x_discrete(labels = c("19", "16-18", "9-15","3-8","1-2")) +
+  # scale_y_continuous(transform = squish_trans,) +
+  labs(color = "Trait-Tissue pair") +
+  scale_color_manual(name = "Trait-Tissue pair", values = custom_palette) +
+  theme_cowplot(9) + 
+  guides(color = "none")
+
+outfile="paper_figures/figS40a.pdf"
+save_plot(outfile, p1,base_width = 3.5, base_height = 3)
+
+
+d_ldsc=fread("data/partitioning_results_summary_250218.txt")
+colnames(d_ldsc) <- tolower(colnames(d_ldsc))
+d_ldsc <- separate(d_ldsc, annot, into = c("tissue", "covar", "group"), sep = "_")
+
+d_data=d_ldsc[d_ldsc$covar=="intensity",]
+
+tissues=sort(unique(d_data$tissue))
+traits=sort(unique(d_data$trait))
+#trait_names=c("Mean corpuscular volume","Lymphocyte count","Eosinophil count","Reticulocyte percentage", "Alanine aminotransferase", "Creatinine", "Glucose", "Heel bone mineral density", "Height")
+trait_names=c("ALT", "Creatinine", "Eosinophil count", "Glucose", "Heel BMD", "Height", "Lymphocyte count", "MCV", "Reticulocyte percentage")
+d_map=data.frame(trait=traits,trait_name=trait_names)
+
+d_data=left_join(d_data,d_map)
+d_data$trait_cell=paste0(d_data$trait_name,"-",d_data$tissue)
+
+###meta-analysis
+
+d_data$weight <- 1 / (d_data$enrichment_std_error)^2
+
+iter=0
+for (group_temp in c("GROUP1", "GROUP2", "GROUP3", "GROUP4")){
+  iter=iter+1
+  d_temp=d_data[d_data$group==group_temp,]
+  weighted_mean <- sum(d_temp$weight * d_temp$enrichment) / sum(d_temp$weight)
+  weighted_se <- sqrt(1 / sum(d_temp$weight))
+  d_sum_temp=data.frame(group= group_temp,enrichment=weighted_mean,enrichment_std_error=weighted_se,trait_cell="Average")
+  if (iter==1){d_sum=d_sum_temp}
+  if (iter>1){d_sum=rbind(d_sum,d_sum_temp)}
+}
+
+########
+
+d_data$group=factor(d_data$group, levels = rev(c("GROUP1", "GROUP2", "GROUP3", "GROUP4")))
+d_sum$group=factor(d_sum$group, levels = rev(c("GROUP1", "GROUP2", "GROUP3", "GROUP4")))
+
+d_all=rbind(d_sum,d_data %>% select(colnames(d_sum)))
+d_all$trait_cell <- factor(d_all$trait_cell,levels = c(sort(unique(d_data$trait_cell)),"Average")  )
+
+########
+num_levels <- length(levels(d_all$trait_cell))
+custom_palette <- brewer.pal(num_levels - 1, "Set3")
+custom_palette <- c(custom_palette, "black")
+###
+
+p0 <- ggplot() +
+  geom_line(data=d_all,aes(x=group, y=enrichment,group=trait_cell,color=trait_cell),linewidth=0.5) +
+  geom_point(data=d_sum,aes(x=group, y=enrichment),size=2.2) +
+  geom_errorbar(data=d_sum,aes(x=group, y=enrichment,ymin=enrichment-2*enrichment_std_error, ymax=enrichment+2*enrichment_std_error), width=0, position=position_dodge(0.0))+
+  geom_line(data=d_sum,aes(x=group, y=enrichment,group = 1),linewidth=1) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "black",linewidth=0.5) +
+  xlab("ATAC-seq peak intensity bin") +
+  ylab(expression("LDSC" ~ h^2 ~ " enrichment, non-coding variants")) +
+  scale_x_discrete(labels = c("Bin 2", "Bin 3", "Bin 4","Bin 5")) +
+  # scale_y_continuous(trans = squish_trans(), breaks = breaks) +
+  labs(color = "Trait-Tissue pair") +
+  scale_color_manual(name = "Trait-Tissue pair", values = custom_palette) +
+  theme_cowplot(9) + 
+  guides(color = "none")
+
+
+outfile="paper_figures/figS40b.pdf"
+save_plot(outfile, p0,base_width = 3.5, base_height = 3)
+
+
+
+d_ldsc=fread("data/ATAC_stratified_ShetANDSpecificity_summary_250520_real_tau.txt") %>% filter(spec_BIN != 'intensity')
+d_ldsc = d_ldsc %>% rename(tau='tau_adjusted', tau_se='tau_adjusted_se')
+d_ldsc = d_ldsc %>% rename_with(tolower)
+d_ldsc <- separate(d_ldsc, annot, into = c("tissue", "group", "shet"), sep = "_")
+
+d_data=d_ldsc
+
+traits=sort(unique(d_data$trait))
+trait_names=c("ALT", "Creatinine", "Eosinophil count", "Glucose", "Heel BMD", "Height", "Lymphocyte count", "MCV", "Reticulocyte percentage")
+d_map=data.frame(trait=traits,trait_name=trait_names)
+
+d_data=left_join(d_data,d_map)
+d_data$trait_cell=paste0(d_data$trait_name,"-",d_data$tissue)
+
+###meta-analysis
+
+d_data$weight <- 1 / (d_data$tau_se)^2
+
+iter=0
+for (group_temp in c("GROUP1", "GROUP2", "GROUP3", "GROUP4", "GROUP5")){
+  for (shet_temp in c('Shet1', 'Shet2', 'Shet3', 'Shet4', 'Shet5')){
+    iter=iter+1
+    d_temp=d_data[d_data$group==group_temp & d_data$shet==shet_temp,]
+    weighted_mean <- sum(d_temp$weight * d_temp$tau) / sum(d_temp$weight)
+    weighted_se <- sqrt(1 / sum(d_temp$weight))
+    d_sum_temp=data.frame(shet=shet_temp, group= group_temp,tau=weighted_mean,tau_se=weighted_se,trait_cell="Average")
+    if (iter==1){d_sum=d_sum_temp}
+    if (iter>1){d_sum=rbind(d_sum,d_sum_temp)}
+  }
+}
+
+########
+
+d_data$group=factor(d_data$group, levels = rev(c("GROUP1", "GROUP2", "GROUP3", "GROUP4", "GROUP5")))
+d_sum$group=factor(d_sum$group, levels = rev(c("GROUP1", "GROUP2", "GROUP3", "GROUP4", "GROUP5")))
+
+d_data$shet=factor(d_data$shet, levels = rev(c("Shet1", "Shet2", "Shet3", "Shet4", "Shet5")),
+                   labels = rev(c(bquote('0.1 < s[het]'),
+                                  bquote('"0.03 < "*s[het] < 0.1'), 
+                                  bquote('"0.01 < "*s[het] < 0.03'),
+                                  bquote('"0.001 < "*s[het] < 0.01'),
+                                  bquote('s[het] < 0.001'))))
+d_sum$shet=factor(d_sum$shet, levels = rev(c("Shet1", "Shet2", "Shet3", "Shet4", "Shet5")),
+                  labels = rev(c(bquote('0.1 < s[het]'),
+                                 bquote('"0.03 < "*s[het] < 0.1'), 
+                                 bquote('"0.01 < "*s[het] < 0.03'),
+                                 bquote('"0.001 < "*s[het] < 0.01'),
+                                 bquote('s[het] < 0.001'))))
+
+d_all=rbind(d_sum,d_data %>% select(colnames(d_sum)))
+d_all$trait_cell <- factor(d_all$trait_cell,levels = c(sort(unique(d_data$trait_cell)),"Average")  )
+
+########
+
+b_point = 2e-5
+squish_power = 0.1
+squish_const = 0.1
+squish_trans <- function() {
+  trans_new(
+    name = "squish",
+    transform = function(x) sign(x)*((abs(x/b_point)+squish_const)^(squish_power)*squish_const^(squish_power-1)/squish_power - squish_const^(2*squish_power-1)/squish_power),
+    inverse = function(x) sign(x)*b_point*(((squish_power*abs(x)+squish_const^(2*squish_power-1))/squish_const^(squish_power-1))^(1/squish_power) - squish_const)
+  )
+}
+
+
+breaks <- c(-4e-6, -2e-6,  0, 2e-6, 4e-6, 8e-6)
+labels <- c(-4e-6, -2e-6,  0, 2e-6, 4e-6, 8e-6)
+
+
+num_levels <- length(levels(d_all$trait_cell))
+custom_palette <- brewer.pal(num_levels - 1, "Set3")
+custom_palette <- c(custom_palette, "black")
+
+p1 <- ggplot() +
+  geom_line(data=d_all,aes(x=group, y=tau,group=trait_cell,color=trait_cell),linewidth=1) +
+  geom_point(data=d_sum,aes(x=group, y=tau),size=2) +
+  geom_errorbar(data=d_sum,aes(x=group, y=tau,ymin=tau-2*tau_se, ymax=tau+2*tau_se), width=0, position=position_dodge(0.0))+
+  geom_line(data=d_sum,aes(x=group, y=tau,group = 1),linewidth=2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black",linewidth=0.5) +
+  xlab("Number of shared tissues") +
+  ylab(expression("LDSC" ~ tau/h^2 * ", non-coding variants")) +
+  scale_x_discrete(labels = c("19", "16-18", "9-15","3-8","1-2")) +
+  scale_y_continuous(trans = squish_trans(), breaks = breaks, labels=fancy_scientific) +
+  labs(color = "Trait-Tissue pair") +
+  scale_color_manual(name = "Trait-Tissue pair", values = custom_palette) +
+  theme_cowplot(9) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  facet_grid(cols = vars(shet), labeller=label_parsed)
+
+outfile="paper_figures/figS41.pdf"
+save_plot(outfile, p1,base_width = 8.3, base_height = 2)
+
+
+
+facet_x_labels <- rev(c(bquote('0.1 < s[het]'),
+                        bquote('"0.03 < "*s[het] < 0.1'), 
+                        bquote('"0.01 < "*s[het] < 0.03'),
+                        bquote('"0.001 < "*s[het] < 0.01'),
+                        bquote('s[het] < 0.001')))
+
+group_names <- c(
+  `GROUP1` = "1-2 tissues",
+  `GROUP2` = "3-8 tissues",
+  `GROUP3` = "9-15 tissues",
+  `GROUP4` = "16-18 tissues",
+  `GROUP5` = "19 tissues"
+)
+
+p1 <- ggplot() +
+  geom_line(data=d_all,aes(x=shet, y=tau,group=trait_cell,color=trait_cell),linewidth=1) +
+  geom_point(data=d_sum,aes(x=shet, y=tau),size=2) +
+  geom_errorbar(data=d_sum,aes(x=shet, y=tau,ymin=tau-2*tau_se, ymax=tau+2*tau_se), width=0, position=position_dodge(0.0))+
+  geom_line(data=d_sum,aes(x=shet, y=tau,group = 1),linewidth=2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black",linewidth=0.5) +
+  xlab(expression(s[het]~'bin')) +
+  ylab(expression("LDSC" ~ tau/h^2 * ", non-coding variants")) +
+  scale_x_discrete(labels=parse(text=facet_x_labels)) +
+  scale_y_continuous(trans = squish_trans(), breaks = breaks, labels=fancy_scientific) +
+  labs(color = "Trait-Tissue pair") +
+  scale_color_manual(name = "Trait-Tissue pair", values = custom_palette) +
+  theme_cowplot(9) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  facet_grid(cols = vars(group), labeller=as_labeller(group_names))
+
+outfile="paper_figures/figS42.pdf"
+save_plot(outfile, p1,base_width = 8.3, base_height = 2.6)
+
+
+d_ldsc=fread("data/partitioning_results_summary_250218.txt")
+colnames(d_ldsc) <- tolower(colnames(d_ldsc))
+d_ldsc <- separate(d_ldsc, annot, into = c("tissue", "covar", "group"), sep = "_")
+
+d_data=d_ldsc[d_ldsc$covar=="specificity",]
+
+tissues=sort(unique(d_data$tissue))
+traits=sort(unique(d_data$trait))
+trait_names=c("ALT", "Creatinine", "Eosinophil count", "Glucose", "Heel BMD", "Height", "Lymphocyte count", "MCV", "Reticulocyte percentage")
+d_map=data.frame(trait=traits,trait_name=trait_names)
+
+d_data=left_join(d_data,d_map)
+d_data$trait_cell=paste0(d_data$trait_name,"-",d_data$tissue)
+
+###meta-analysis
+
+d_data$weight <- 1 / (d_data$prop._h2_std_error)^2
+
+iter=0
+for (group_temp in c("GROUP1", "GROUP2", "GROUP3", "GROUP4", "GROUP5")){
+  iter=iter+1
+  d_temp=d_data[d_data$group==group_temp,]
+  weighted_mean <- sum(d_temp$weight * d_temp$prop._h2) / sum(d_temp$weight)
+  weighted_se <- sqrt(1 / sum(d_temp$weight))
+  d_sum_temp=data.frame(group= group_temp,prop._h2=weighted_mean,prop._h2_std_error=weighted_se,trait_cell="Average")
+  if (iter==1){d_sum=d_sum_temp}
+  if (iter>1){d_sum=rbind(d_sum,d_sum_temp)}
+}
+
+########
+
+d_data$group=factor(d_data$group, levels = rev(c("GROUP1", "GROUP2", "GROUP3", "GROUP4", "GROUP5")))
+d_sum$group=factor(d_sum$group, levels = rev(c("GROUP1", "GROUP2", "GROUP3", "GROUP4", "GROUP5")))
+
+d_all=rbind(d_sum,d_data %>% select(colnames(d_sum)))
+d_all$trait_cell <- factor(d_all$trait_cell,levels = c(sort(unique(d_data$trait_cell)),"Average")  )
+
+########
+
+
+num_levels <- length(levels(d_all$trait_cell))
+custom_palette <- brewer.pal(num_levels - 1, "Set3")
+custom_palette <- c(custom_palette, "black")
+
+p1 <- ggplot() +
+  geom_line(data=d_all,aes(x=group, y=prop._h2,group=trait_cell,color=trait_cell),linewidth=0.5) +
+  geom_line(data=d_sum,aes(x=group, y=prop._h2,group = 1),linewidth=1) +
+  geom_point(data=d_sum,aes(x=group, y=prop._h2),size=2) +
+  geom_errorbar(data=d_sum,aes(x=group, y=prop._h2,ymin=prop._h2-2*prop._h2_std_error, ymax=prop._h2+2*prop._h2_std_error), width=0, position=position_dodge(0.0))+
+  xlab("Number of shared tissues") +
+  ylab(expression("LDSC Proportion of " ~ h^2)) +
+  scale_x_discrete(labels = c("19", "16-18", "9-15","3-8","1-2")) +
+  labs(color = "Trait-Tissue pair") +
+  scale_color_manual(name = "Trait-Tissue pair", values = custom_palette) +
+  theme_cowplot(9) + 
+  guides(color = "none")
+
+outfile="paper_figures/figS43.pdf"
+save_plot(outfile, p1,base_width = 3.5, base_height = 3)
 
 
 
@@ -1773,7 +4041,7 @@ save_plot(outfile, p0,base_width = 3.5, base_height = 3)
 
 
 #########################
-### Figure S12 ###
+### Figure S44 ###
 #########################
 
 d_expected=fread("data/zeng_et_al_v3.tsv")
@@ -1793,7 +4061,7 @@ p1 <- ggplot(d_joint, aes(x=CDS.Length, y=exp_lof)) +
   theme_cowplot(9) +
   ylab("Expected LoFs") 
 
-outfile=paste0("paper_figures/figS12.pdf")
+outfile=paste0("paper_figures/figS44.pdf")
 save_plot(outfile, p1,base_width = 3.5, base_height = 3)
 
 
@@ -1842,9 +4110,9 @@ d_s_het$exp_lof=replace(d_s_het$exp_lof, is.na(d_s_het$exp_lof), 0) #replace NAs
 d_s_het=d_s_het[d_s_het$hgnc_id %in% d_gamma_hats$hgnc_id,]
 d_s_het$E_cat=ntile(d_s_het$exp_lof,E_bin_size)
 
-d_gamma2_matrix= d_gamma_unbiased %>% dplyr::select(-hgnc_id)
-d_SE_matrix= d_SEs %>% dplyr::select(-hgnc_id) 
-d_z_matrix= d_z_scores %>% dplyr::select(-hgnc_id)
+d_gamma2_matrix= d_gamma_unbiased %>% dplyr::select(-hgnc_id) %>% dplyr::select(traits)
+d_SE_matrix= d_SEs %>% dplyr::select(-hgnc_id) %>% dplyr::select(traits)
+d_z_matrix= d_z_scores %>% dplyr::select(-hgnc_id) %>% dplyr::select(traits)
 d_z_matrix=replace(d_z_matrix, is.na(d_z_matrix), 1) #replace NAs with 1
 
 #compute data points per parameter, i.e. gamma, z, etc
@@ -1856,6 +4124,7 @@ d_data=(d_z_scores %>% dplyr::select(hgnc_id))
 d_data$mean_z2=rowMeans(d_z_matrix^2,na.rm = T)
 d_data$mean_gamma2=rowMeans(d_gamma2_matrix,na.rm = T)
 d_data$mean_SE2=rowMeans(d_SE_matrix^2,na.rm = T)
+d_data$mean_sig=rowMeans(d_z_matrix^2 > 22, na.rm=T)
 d_data$count_traits_gamma=rowSums(d_test_gamma,na.rm = T)
 d_data$count_traits_se=rowSums(d_test_se,na.rm = T)
 d_data$count_traits_z=rowSums(d_test_z,na.rm = T)
@@ -1884,7 +4153,7 @@ data_sum$se_z_sq=data_sum$sd_z_sq/sqrt(data_sum$count_z_sq)
 #########
 plot_scale = 1
 
-span_temp=0.8
+span_temp=1.5
 color_temp="#006400"
 p0 <- ggplot(data_sum, aes(x=mean_E, y=mean_z_sq)) +
   geom_point(size=2,alpha=0.2,color=color_temp) + 
@@ -1897,6 +4166,7 @@ outfile="paper_figures/fig5c.pdf"
 save_plot(outfile, p0,base_width = 2.25*plot_scale, base_height = 2*plot_scale)
 
 #
+span_temp=1.5
 color_temp="#4169E1"
 p1 <- ggplot(data_sum, aes(x=mean_E, y=mean_gamma_sq)) +
   geom_point(size=2,alpha=0.2,color=color_temp) + 
@@ -1910,10 +4180,11 @@ save_plot(outfile, p1,base_width = 2.25*plot_scale, base_height = 2*plot_scale)
 
 #
 
+span_temp=0.8
 color_temp="#DC143C"
 p2 <- ggplot(data_sum, aes(x=mean_E, y=mean_se_sq)) +
   geom_point(size=2,alpha=0.2,color=color_temp) + 
-  geom_smooth(method = "loess", span=span_temp,se = F, color=alpha(color_temp, 0.6)) +
+  geom_smooth(method = "loess", span=span_temp,se = F, color=alpha(color_temp, 0.6)) + 
   xlab("Mean expected LoFs in bin") +
   ylab(expression(paste("Mean SE(" * hat(gamma) * ")"^2 ~ "across traits"))) +
   theme_cowplot(9)
@@ -1931,10 +4202,8 @@ save_plot(outfile, p2,base_width = 2.25*plot_scale, base_height = 2*plot_scale)
 
 
 
-
-
 #########################
-### Figure S13 ###
+### Figure S45 ###
 #########################
 
 trajectories <- suppressWarnings(melt(as.data.table(t(read.table('data/wright_fisher_trajectories.txt')/20000))))
@@ -1948,7 +4217,7 @@ p1 <- ggplot(trajectories, aes(x=time, y=value, group=variable)) +
   ylab("Frequency") +
   scale_x_continuous(breaks=c(0, 250, 500, 750, 1000),labels=c(0, 250, 500, 750, 'Present Day'), expand=expansion(add=c(50, 100)))
 
-outfile="paper_figures/figS13.pdf"
+outfile="paper_figures/figS45.pdf"
 save_plot(outfile, p1, base_width = 4, base_height = 2)
 
 
@@ -2132,7 +4401,7 @@ save_plot(outfile, p2,base_width = 2, base_height = 2)
 p3 <- ggplot(theory_spec, aes(x = p_bin, y = value, group=rep)) +
   geom_line(color=alpha("orange", 0.1)) +
   xlab("p-value rank") +
-  ylab("Mean specificity")
+  ylab("Mean trait specificity")
 
 outfile=paste0("paper_figures/fig5g.pdf")
 save_plot(outfile, p3,base_width = 1.85, base_height = 2)
@@ -2146,7 +4415,7 @@ save_plot(outfile, p3,base_width = 1.85, base_height = 2)
 
 
 #########################
-### Figure S14-17 ###
+### Figure S46-49 ###
 #########################
 
 
@@ -2236,7 +4505,7 @@ p_full <- plot_grid(freq_plots[[1]], freq_plots[[2]], freq_plots[[3]], freq_plot
                     hist_plots[[1]], hist_plots[[2]], hist_plots[[3]], hist_plots[[4]],
                     nrow=4, ncol=4, byrow=FALSE)
 
-save_plot('paper_figures/figS14.pdf', p_full,base_width = 2.25*4, base_height = 2*4)
+save_plot('paper_figures/figS46.pdf', p_full,base_width = 2.25*4, base_height = 2*4)
 
 
 
@@ -2259,7 +4528,7 @@ p_full <- plot_grid(freq_plots[[1]], freq_plots[[2]], freq_plots[[3]], freq_plot
                     hist_plots[[1]], hist_plots[[2]], hist_plots[[3]], hist_plots[[4]], hist_plots[[5]],
                     nrow=5, ncol=4, byrow=FALSE)
 
-save_plot('paper_figures/figS16.pdf', p_full,base_width = 2.25*4, base_height = 2*5)
+save_plot('paper_figures/figS48.pdf', p_full,base_width = 2.25*4, base_height = 2*5)
 
 
 
@@ -2281,7 +4550,7 @@ p_full <- plot_grid(freq_plots[[1]], freq_plots[[2]], freq_plots[[3]], freq_plot
                     hist_plots[[1]], hist_plots[[2]], hist_plots[[3]], hist_plots[[4]], hist_plots[[5]],
                     nrow=5, ncol=4, byrow=FALSE)
 
-save_plot('paper_figures/figS15.pdf', p_full,base_width = 2.25*4, base_height = 2*5)
+save_plot('paper_figures/figS47.pdf', p_full,base_width = 2.25*4, base_height = 2*5)
 
 
 
@@ -2303,7 +4572,7 @@ p_full <- plot_grid(freq_plots[[1]], freq_plots[[2]], freq_plots[[3]], freq_plot
                     hist_plots[[1]], hist_plots[[2]], hist_plots[[3]], hist_plots[[4]], hist_plots[[5]],
                     nrow=5, ncol=4, byrow=FALSE)
 
-save_plot('paper_figures/figS17.pdf', p_full,base_width = 2.25*4, base_height = 2*5)
+save_plot('paper_figures/figS49.pdf', p_full,base_width = 2.25*4, base_height = 2*5)
 
 
 
@@ -2408,7 +4677,7 @@ save_plot(outfile, p1,base_width = 2.5, base_height = 2)
 
 
 #########################
-### Figure S18 ###
+### Figure S50 ###
 #########################
 
 
@@ -2443,7 +4712,7 @@ p1 <- ggplot(d_data, aes(x=mean_s_het, y=coeff)) +
   ylab("Log odds of GWAS hit") +
   theme_cowplot(9)
 
-outfile=("paper_figures/figS18.pdf")
+outfile=("paper_figures/figS50.pdf")
 save_plot(outfile, p1,base_width = 3.5, base_height = 3)
 
 
@@ -2452,7 +4721,7 @@ save_plot(outfile, p1,base_width = 3.5, base_height = 3)
 
 
 #########################
-### Figure S19 ###
+### Figure S51 ###
 #########################
 
 
@@ -2480,7 +4749,7 @@ p1 <- ggplot(df, aes(x=num_hits, y=corr_just_hits)) +
   ggtitle("Genes with at least one hit")
 
 
-outfile=("paper_figures/figS19.pdf")
+outfile=("paper_figures/figS51.pdf")
 pfull <- plot_grid(p0, p1, ncol=2, nrow=1)
 
 save_plot(outfile, pfull, base_width = 9, base_height = 4)
