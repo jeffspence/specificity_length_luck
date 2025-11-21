@@ -1,5 +1,5 @@
 # specificity_length_luck
- Scripts used for plotting and analyzing data for https://www.biorxiv.org/content/10.1101/2024.12.12.628073v1.abstract
+Scripts used for plotting and analyzing data for [Specificity, length and luck drive gene rankings in association studies](https://www.nature.com/articles/s41586-025-09703-7).
 
 
 
